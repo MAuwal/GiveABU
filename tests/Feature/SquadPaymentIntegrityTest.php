@@ -662,4 +662,55 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertStringContainsString('Donor Tier:</strong> Gold Benefactor', $html);
         $this->assertStringContainsString('Date:</strong> 22 Sep 2026', $html);
     }
+
+    public function test_queued_recovery_is_bounded_and_rotates_past_unresolved_payments(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        \Illuminate\Support\Facades\Cache::flush();
+        $this->donation->forceFill(['created_at' => now()->subDays(2)])->save();
+        $second = $this->donation->replicate();
+        $second->payment_reference = 'SECOND-RECOVERY';
+        $second->created_at = now()->subDays(2);
+        $second->save();
+        app(SquadPaymentService::class)->event($second, 'payment.initialized');
+        $this->artisan('payments:queue-pending --limit=1')->assertSuccessful();
+        $this->artisan('payments:queue-pending --limit=1')->assertSuccessful();
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\VerifyPendingPayment::class, fn ($job) => $job->donationId === $this->donation->id);
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\VerifyPendingPayment::class, fn ($job) => $job->donationId === $second->id);
+        $this->artisan('payments:queue-pending --limit=0')->assertFailed();
+    }
+
+    public function test_queued_recovery_uses_integrity_service_and_completed_replay_skips_provider(): void
+    {
+        $this->gateway();
+        $job = new \App\Jobs\VerifyPendingPayment($this->donation->id);
+        $job->handle();
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        $job->handle();
+        Http::assertSentCount(1);
+        $this->assertSame(120, $job->timeout);
+        $this->assertTrue($job->afterCommit);
+    }
+
+    public function test_queued_provider_outage_remains_pending_and_retries(): void
+    {
+        Http::fake(['*' => Http::response([], 503)]);
+        try {
+            (new \App\Jobs\VerifyPendingPayment($this->donation->id))->handle();
+            $this->fail('Unavailable provider must retry.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Payment provider temporarily unavailable', $e->getMessage());
+        }
+        $this->assertSame('pending', $this->donation->fresh()->status);
+    }
+
+    public function test_payment_query_indexes_are_repeatable_and_reversible(): void
+    {
+        $migration = require database_path('migrations/2026_10_01_000004_add_payment_query_indexes.php');
+        $migration->up();
+        $migration->up();
+        $this->assertTrue(Schema::hasIndex('donations', 'donations_recovery_scan'));
+        $migration->down();
+        $this->assertFalse(Schema::hasIndex('donations', 'donations_recovery_scan'));
+    }
 }
