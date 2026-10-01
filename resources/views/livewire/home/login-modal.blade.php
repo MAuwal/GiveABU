@@ -88,7 +88,7 @@
                                 <div class="form-group mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
                                         <label class="font-weight-bold text-dark small text-uppercase mb-0" style="font-family: 'Inter', sans-serif; color: #374151; font-size: 0.875rem;">Password</label>
-                                        <a href="#" class="small font-weight-bold text-decoration-none" style="color: #10b981;">Forgot password?</a>
+                                        <a href="{{ route('donor.password.request') }}" class="small font-weight-bold text-decoration-none" style="color: #10b981;">Forgot password?</a>
                                     </div>
                                     <input type="password" 
                                            wire:model="password"
@@ -144,7 +144,7 @@
                             </form>
                             
                             <div class="mt-auto text-center">
-                                <p class="text-muted small mb-0">&copy; {{ date('Y') }} ABU Endowment Foundation. All rights reserved.</p>
+                                <p class="text-muted small mb-0">&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
                             </div>
                         </div>
                     </div>

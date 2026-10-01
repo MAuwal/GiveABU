@@ -47,7 +47,7 @@
         <!-- Footer -->
         <div style="background-color: #f8fafc; padding: 20px 30px; text-align: center; border-top: 1px solid #e5e7eb;">
             <p style="color: #6b7280; margin: 0; font-size: 12px;">
-                &copy; {{ date('Y') }} GIVE ABU. All rights reserved.
+                &copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.
             </p>
         </div>
     </div>

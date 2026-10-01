@@ -112,10 +112,10 @@
             <div class="copyright pt-5">
                 <div class="row">
                     <div class="col-md-6 text-center text-md-start mb-3 mb-md-0">
-                        &copy; <a class="fw-semi-bold" href="#!">ABU Endowment</a>, All Rights Reserved.
+                        &copy; {{ date('Y') }} ABU. All rights reserved.
                     </div>
                     <div class="col-md-6 text-center text-md-end">
-                        Developed for <a class="fw-semi-bold" href="#!">Ahmadu Bello University</a> | Supported by Alumni & Partners
+                        Powered by @@KADICT Hub
                     </div>
                 </div>
             </div>

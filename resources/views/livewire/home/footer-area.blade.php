@@ -93,7 +93,7 @@
     <div class="copy-right_text" style="border-top: 1px solid rgba(255,255,255,0.1); padding: 25px 0;">
         <div class="container">
             <p style="color: #9ca3af; font-size: 0.9rem; margin: 0; text-align: center;">
-                &copy; <script>document.write(new Date().getFullYear());</script> Ahmadu Bello University Zaria Development Foundation. All rights reserved.
+                &copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.
             </p>
         </div>
     </div>

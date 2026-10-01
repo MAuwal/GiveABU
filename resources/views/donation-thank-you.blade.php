@@ -318,6 +318,6 @@
         </div>
     </div>
 
-    <footer>&copy; {{ date('Y') }} Ahmadu Bello University Giving &amp; Crowd Funding. All rights reserved.</footer>
+    <footer>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</footer>
 </body>
 </html>

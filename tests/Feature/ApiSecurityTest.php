@@ -248,6 +248,131 @@ class ApiSecurityTest extends TestCase
         $this->postJson('/api/donor-sessions/reset/test-reset-token', $payload)->assertNotFound();
     }
 
+    public function test_website_donor_password_recovery_sends_local_link_and_resets_once(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+        $this->get('/forgot-password')->assertOk()->assertSee('Send reset link');
+        $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => $this->donor->email])
+            ->assertRedirect('/forgot-password')->assertSessionHas('status');
+        $record = \App\Models\PasswordReset::firstOrFail();
+        \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\PasswordResetLinkMail::class, function ($mail) use ($record) {
+            return $mail->hasTo($this->donor->email)
+                && $mail->resetUrl === route('donor.password.reset', ['token' => $record->token]);
+        });
+        $this->get('/reset-password?token='.$record->token)->assertOk()->assertSee('Confirm password');
+        $payload = ['token' => $record->token, 'password' => 'new-secure-password', 'password_confirmation' => 'new-secure-password'];
+        $this->post('/donor/reset-password', $payload)->assertRedirect(route('donor.password.request'))->assertSessionHas('status');
+        $this->assertTrue(\Illuminate\Support\Facades\Hash::check('new-secure-password', $this->session->fresh()->password));
+        $this->getJson('/api/messages/received', $this->auth())->assertUnauthorized();
+        $this->post('/donor/reset-password', $payload)->assertSessionHasErrors('token');
+    }
+
+    public function test_website_recovery_hides_missing_accounts_and_rejects_expired_or_mismatched_resets(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+        $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => 'missing@example.test'])
+            ->assertRedirect('/forgot-password')->assertSessionHas('recovery_requested', true);
+        \Illuminate\Support\Facades\Mail::assertNothingSent();
+        DB::table('password_resets')->insert(['donor_session_id' => $this->session->id, 'token' => 'expired-token',
+            'used' => false, 'expires_at' => now()->subMinute()]);
+        $this->post('/donor/reset-password', ['token' => 'expired-token', 'password' => 'secure-password', 'password_confirmation' => 'secure-password'])
+            ->assertSessionHasErrors('token');
+        $this->post('/donor/reset-password', ['token' => 'expired-token', 'password' => 'secure-password', 'password_confirmation' => 'different-password'])
+            ->assertSessionHasErrors('password');
+        $this->assertTrue(\Illuminate\Support\Facades\Hash::check('strong-test-password', $this->session->fresh()->password));
+    }
+
+    public function test_website_forgot_password_is_throttled_and_does_not_reset_google_accounts(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+        $this->session->update(['auth_provider' => 'google', 'password' => null]);
+        for ($i = 0; $i < 6; $i++) {
+            $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => $this->donor->email])
+                ->assertRedirect('/forgot-password');
+        }
+        $this->post('/donor/forgot-password', ['email' => $this->donor->email])->assertStatus(429);
+        \Illuminate\Support\Facades\Mail::assertNothingSent();
+        $this->assertSame(0, \App\Models\PasswordReset::count());
+    }
+
+    public function test_existing_profile_can_set_password_only_after_following_emailed_signed_link(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+        $profile = Donor::create(['name' => 'Profile', 'surname' => 'Only', 'email' => 'profile-only@example.test']);
+        $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => $profile->email])->assertRedirect('/forgot-password');
+        $this->assertFalse(DonorSession::where('donor_id', $profile->id)->exists());
+        $url = '';
+        \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\PasswordResetLinkMail::class, function ($mail) use (&$url, $profile) {
+            $url = $mail->resetUrl;
+
+            return $mail->hasTo($profile->email);
+        });
+        $this->get($url)->assertOk()->assertSee('Confirm password');
+        $payload = ['password' => 'profile-secure-password', 'password_confirmation' => 'profile-secure-password'];
+        $this->post($url, $payload)->assertRedirect(route('donor.password.request'));
+        $account = DonorSession::where('donor_id', $profile->id)->firstOrFail();
+        $this->assertSame($profile->email, $account->username);
+        $this->assertNotNull($account->email_verified_at);
+        $this->assertTrue(\Illuminate\Support\Facades\Hash::check($payload['password'], $account->password));
+        $this->post($url, $payload)->assertSessionHasErrors('token');
+        $this->assertSame(1, DonorSession::where('donor_id', $profile->id)->count());
+    }
+
+    public function test_profile_setup_rejects_unsigned_expired_tampered_and_changed_email_links(): void
+    {
+        $profile = Donor::create(['name' => 'Profile', 'surname' => 'Only', 'email' => 'profile-only@example.test']);
+        $payload = ['password' => 'profile-secure-password', 'password_confirmation' => 'profile-secure-password'];
+        $this->post('/donor/set-password/'.$profile->id, $payload)->assertForbidden();
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute('donor.password.setup', now()->subMinute(), ['donor' => $profile->id, 'email' => $profile->email]);
+        $this->post($url, $payload)->assertForbidden();
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute('donor.password.setup', now()->addMinutes(10), ['donor' => $profile->id, 'email' => $profile->email]);
+        $this->post($url.'&email=other@example.test', $payload)->assertForbidden();
+        $profile->update(['email' => 'changed@example.test']);
+        $this->post($url, $payload)->assertForbidden();
+        $this->assertFalse(DonorSession::where('donor_id', $profile->id)->exists());
+    }
+
+    public function test_reset_email_uses_giveabu_logo_and_recovery_page_shows_confirmation(): void
+    {
+        $html = (new \App\Mail\PasswordResetLinkMail('https://giveabu.com/reset-password?token=test', 'test@example.test'))->render();
+        $this->assertStringContainsString('abu_logo_white_for_email.png', $html);
+        $this->assertStringContainsString('GiveABU logo', $html);
+        $this->assertStringNotContainsString('laravel.com/img/notification-logo.png', $html);
+        $this->assertStringContainsString('Powered by @KADICT Hub', $html);
+        $this->withSession(['recovery_requested' => true, 'status' => 'Check your inbox and spam folder.'])
+            ->get('/forgot-password')->assertOk()->assertSee('Check your email')->assertSee('Check your inbox and spam folder.');
+    }
+
+    public function test_admin_website_password_recovery_uses_local_broker_link(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->rememberToken();
+        });
+        Schema::create('password_reset_tokens', function (Blueprint $table) {
+            $table->string('email')->primary();
+            $table->string('token');
+            $table->timestamp('created_at')->nullable();
+        });
+        \Illuminate\Support\Facades\Notification::fake();
+        $user = User::create(['name' => 'Admin', 'email' => 'admin@example.test', 'password' => 'old-password']);
+        $this->get('/admin/forgot-password')->assertOk()->assertSee('Send reset link');
+        $this->from('/admin/forgot-password')->post('/forgot-password', ['email' => $user->email])
+            ->assertRedirect('/admin/forgot-password')->assertSessionHas('status');
+        \Illuminate\Support\Facades\Notification::assertSentTo($user, \Illuminate\Auth\Notifications\ResetPassword::class, function ($notification) use ($user) {
+            $url = $notification->toMail($user)->actionUrl;
+            $this->assertSame(route('password.reset', ['token' => $notification->token, 'email' => $user->email]), $url);
+            $this->get($url)->assertOk()->assertSee('Confirm password');
+            $payload = ['email' => $user->email, 'token' => $notification->token, 'password' => 'new-admin-password', 'password_confirmation' => 'new-admin-password'];
+            $this->post('/reset-password', $payload)->assertRedirect(route('admin.login'));
+            $this->assertTrue(\Illuminate\Support\Facades\Hash::check('new-admin-password', $user->fresh()->password));
+            $this->post('/reset-password', $payload)->assertSessionHasErrors('email');
+
+            return true;
+        });
+        $this->from('/admin/forgot-password')->post('/forgot-password', ['email' => 'absent@example.test'])
+            ->assertRedirect('/admin/forgot-password')->assertSessionHas('recovery_requested', true);
+    }
+
     public function test_otp_guess_limit_is_shared_across_source_ips(): void
     {
         Cache::put('sms_verification_08012345678', '123456', 600);

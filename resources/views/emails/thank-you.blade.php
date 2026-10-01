@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -86,47 +86,37 @@
         </div>
 
         <div class="content">
-            <h2>Dear {{ $donorName }},</h2>
+            <p>On behalf of Ahmadu Bello University, we extend our sincere appreciation for your generous contribution.</p>
 
-            <p>On behalf of the entire Ahmadu Bello University community, we extend our heartfelt gratitude for your generous donation to GIVE ABU.</p>
-
-            <p>Your contribution of <strong>₦{{ $amount }}</strong> to the <strong>{{ $donationType }}</strong> will make a significant impact on the lives of students, researchers, and the broader ABU community.</p>
+            <p>Your donation of ₦{{ $amount }} demonstrates your commitment to supporting education, research, and the future development of our institution.</p>
 
             <div class="donation-details">
                 <h3 style="margin-top: 0; color: #006B3F;">Donation Details</h3>
-                <p><strong>Amount:</strong> <span class="amount">₦{{ $amount }}</span></p>
-                <p><strong>Donation Type:</strong> {{ $donationType }}</p>
-                @if($projectName !== 'GIVE ABU')
-                <p><strong>Project:</strong> {{ $projectName }}</p>
-                @endif
-                <p><strong>Payment Reference:</strong> {{ $reference }}</p>
-                <p><strong>Date:</strong> {{ $donationDate->format('F d, Y \a\t h:i A') }}</p>
+                <p><strong>Donor Tier:</strong> {{ $tierName ?? 'General Supporter' }}</p>
+                <p><strong>Amount:</strong> ₦{{ $amount }}</p>
+                <p><strong>Date:</strong> {{ $donationDate->format('d M Y') }}</p>
             </div>
 
             <p>Your support helps us:</p>
             <ul>
-                <li>Provide scholarships to deserving students</li>
-                <li>Fund groundbreaking research projects</li>
-                <li>Improve infrastructure and learning facilities</li>
-                <li>Support community development initiatives</li>
+                <li>Provide scholarships for deserving students</li>
+                <li>Support innovative research initiatives</li>
+                <li>Improve learning facilities and infrastructure</li>
+                <li>Advance community development efforts</li>
             </ul>
 
-            <p>Every contribution, no matter the size, plays a crucial role in building a brighter future for ABU and the generations to come. Your generosity is truly appreciated and will leave a lasting legacy.</p>
-
-            <p>We will keep you updated on how your donation is being used to make a positive impact. Thank you for being part of the ABU family and for your commitment to excellence in education.</p>
+            <p>Every contribution strengthens the future of ABU and creates opportunities for generations to come.</p>
+            <p>Thank you for being part of the ABU legacy.</p>
 
             <div class="signature">
-                <p>With sincere appreciation,</p>
-                <p><strong>The GIVE ABU Team</strong><br>
-                Ahmadu Bello University, Zaria<br>
-                Kaduna State, Nigeria</p>
+                <p>Sincerely,<br>Ahmadu Bello University, Zaria</p>
             </div>
         </div>
 
         <div class="footer">
             <p>This is an automated email. Please do not reply to this message.</p>
             <p>For inquiries, please contact us at: endowment@abu.edu.ng</p>
-            <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
         </div>
     </div>
 </body>
