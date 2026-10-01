@@ -12,5 +12,7 @@ Reset Password
 If you did not request this, you can safely ignore this email.
 
 Thanks,<br>
-{{ config('app.name') }}
+GiveABU Team
+
+© {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.
 </x-mail::message>

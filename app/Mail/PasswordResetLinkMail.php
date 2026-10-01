@@ -25,7 +25,7 @@ class PasswordResetLinkMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Reset your ABU Endowment password',
+            subject: 'Reset your GiveABU password',
         );
     }
 

@@ -1291,7 +1291,7 @@ class DonorSessionController extends Controller
     /**
      * POST /api/donor-sessions/forgot-password
      */
-    public function forgotPassword(Request $request)
+    public function forgotPassword(Request $request, bool $website = false)
     {
         $request->validate([
             'email' => 'required|email',
@@ -1340,7 +1340,7 @@ class DonorSessionController extends Controller
             'used' => false,
         ]);
 
-        $resetUrl = $this->buildResetUrl($token, $callbackUrl);
+        $resetUrl = $website ? route('donor.password.reset', ['token' => $token]) : $this->buildResetUrl($token, $callbackUrl);
 
         try {
             Mail::to($donorSession->username)->send(new PasswordResetLinkMail($resetUrl, $donorSession->username));

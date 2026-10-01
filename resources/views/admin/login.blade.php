@@ -66,6 +66,10 @@
             <form action="{{ route('admin.login.post') }}" method="POST" class="space-y-6">
                 @csrf
 
+                @if(session('status'))
+                    <p role="status" class="text-green-800">{{ session('status') }}</p>
+                @endif
+
                 <!-- Error Messages -->
                 @if ($errors->any())
                     <div class="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-r shadow-sm" role="alert">
@@ -96,7 +100,7 @@
                 <div class="space-y-2">
                     <div class="flex justify-between items-center">
                         <label for="password" class="text-sm font-medium text-gray-700 block">Password</label>
-                        <a href="#" class="text-xs font-medium text-[#10b981] hover:text-[#064e3b]">Forgot password?</a>
+                        <a href="{{ route('password.request') }}" class="text-xs font-medium text-[#10b981] hover:text-[#064e3b]">Forgot password?</a>
                     </div>
                     <div class="relative group">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
