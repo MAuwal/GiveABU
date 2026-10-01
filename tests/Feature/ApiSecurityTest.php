@@ -147,7 +147,7 @@ class ApiSecurityTest extends TestCase
     {
         $other = Donor::create(['name' => 'Other', 'surname' => 'Donor', 'email' => 'other@example.test']);
         $this->getJson('/api/donor/'.$other->id.'/messages', $this->auth())->assertForbidden();
-        $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk();
+        $response = $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk();
         $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
         $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
     }
@@ -389,8 +389,7 @@ class ApiSecurityTest extends TestCase
         Donation::create(['donor_id' => 999, 'amount' => 9000, 'status' => 'completed', 'payment_reference' => 'OTHER-PRIVATE']);
         $response = $this->withSession(['donor_token' => $this->token])->get('/donor/dashboard')->assertOk()
             ->assertSee('OWN-DONATION')->assertSee('OWN-PENDING')->assertDontSee('OTHER-PRIVATE')
-            ->assertViewHas('stats', fn ($stats) => (float) $stats['total'] === 1000.0 && $stats['count'] === 2 && $stats['pending'] === 1)
-            ;
+            ->assertViewHas('stats', fn ($stats) => (float) $stats['total'] === 1000.0 && $stats['count'] === 2 && $stats['pending'] === 1);
         $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
         $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
         $this->get('/donor/donations')->assertOk();
