@@ -276,6 +276,12 @@
                 </div>
                 @endif
 
+                <div style="margin-bottom:1rem;">
+                    <label for="donorPhoneInput" style="display:block;font-size:0.78rem;font-weight:600;color:#6b7280;margin-bottom:0.4rem;">Phone Number <span style="color:#dc2626;">*</span></label>
+                    <input type="tel" id="donorPhoneInput" value="{{ $user['phone'] ?? '' }}" autocomplete="tel" placeholder="08012345678" required maxlength="30"
+                        style="width:100%;border:2px solid #d1d5db;border-radius:10px;padding:0.65rem 0.85rem;font-size:0.9rem;color:#1f2937;box-sizing:border-box;">
+                </div>
+
                 {{-- Payment method label --}}
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
                     <div style="flex:1;height:1px;background:#f3f4f6;"></div>
@@ -417,7 +423,12 @@
                 return null;
             }
 
-            return { amount, fullName, email };
+            const phone = document.getElementById('donorPhoneInput').value.trim();
+            if (!/^\+?[0-9 ()-]{7,30}$/.test(phone)) {
+                showDonationError('Please enter a valid phone number for your SMS receipt.');
+                return null;
+            }
+            return { amount, fullName, email, phone };
         }
 
         function _setLoading(btnId, spinnerId, textId, loading) {
@@ -431,7 +442,7 @@
             const inputs = _validateInputs();
             if (!inputs) return;
 
-            const { amount, fullName, email } = inputs;
+            const { amount, fullName, email, phone } = inputs;
             const parts   = fullName.trim().split(/\s+/);
             const name    = parts[0];
             const surname = parts.length > 1 ? parts.slice(1).join(' ') : parts[0];
@@ -454,7 +465,7 @@
                             name,
                             surname,
                             other_name: null,
-                            phone: null,
+                            phone,
                             endowment: 'yes',
                             type: 'endowment',
                             project_id: null,
@@ -480,7 +491,7 @@
             const inputs = _validateInputs();
             if (!inputs) return;
 
-            const { amount, fullName, email } = inputs;
+            const { amount, fullName, email, phone } = inputs;
 
             _setLoading('squadBtn', 'squadSpinner', 'squadBtnText', true);
 
@@ -492,7 +503,7 @@
                         'Content-Type': 'application/json',
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
                     },
-                    body: JSON.stringify({ amount, email, customer_name: fullName }),
+                    body: JSON.stringify({ amount, email, phone, customer_name: fullName }),
                 });
 
                 const result = await res.json();
@@ -556,7 +567,7 @@
             const inputs = _validateInputs();
             if (!inputs) return;
 
-            const { amount, fullName, email } = inputs;
+            const { amount, fullName, email, phone } = inputs;
             _setLoading('interswitchBtn', 'interswitchSpinner', 'interswitchBtnText', true);
 
             try {
@@ -570,7 +581,7 @@
                         'Content-Type': 'application/json',
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
                     },
-                    body: JSON.stringify({ amount, email, customer_name: fullName, callback_url: callbackUrl }),
+                    body: JSON.stringify({ amount, email, phone, customer_name: fullName, callback_url: callbackUrl }),
                 });
 
                 const result = await res.json();

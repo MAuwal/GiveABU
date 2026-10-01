@@ -45,12 +45,14 @@ class MakeDonationArea extends Component
         $this->validate([
             'amount' => 'required|numeric|min:100',
             'email'  => 'required|email',
+            'phone' => ['required', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
         ]);
 
         $reference = 'ABU_' . time() . '_' . uniqid();
         $donorId   = $this->resolveDonorId();
 
         $donation = Donation::create([
+            'receipt_phone' => $this->phone,
             'donor_id'          => $donorId,
             'amount'            => $this->amount,
             'type'              => 'endowment',
@@ -82,12 +84,14 @@ class MakeDonationArea extends Component
         $this->validate([
             'amount' => 'required|numeric|min:100',
             'email'  => 'required|email',
+            'phone' => ['required', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
         ]);
 
         // JS handler calls /api/squad/pay and redirects to Squad checkout page
         $this->dispatch('initiate-squad', [
             'email'         => $this->email,
             'amount'        => $this->amount,
+            'phone' => $this->phone,
             'customer_name' => $this->name ?? '',
         ]);
     }
@@ -97,11 +101,13 @@ class MakeDonationArea extends Component
         $this->validate([
             'amount' => 'required|numeric|min:100',
             'email'  => 'required|email',
+            'phone' => ['required', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
         ]);
 
         $this->dispatch('initiate-interswitch', [
             'email'         => $this->email,
             'amount'        => $this->amount,
+            'phone' => $this->phone,
             'customer_name' => $this->name ?? '',
         ]);
     }
@@ -131,6 +137,7 @@ class MakeDonationArea extends Component
                             'verified_at' => now(),
                             'paid_at'     => now(),
                         ]);
+                        app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
                         $this->dispatch('donation-completed');
                     }
 

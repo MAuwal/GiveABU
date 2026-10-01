@@ -38,6 +38,7 @@ class InterswitchPaymentController extends Controller
     {
         $request->validate([
             'amount' => 'required|numeric|min:100',
+            'phone' => ['nullable', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
             'email' => 'required|email',
             'customer_name' => 'nullable|string|max:255',
             'callback_url' => 'nullable|url',
@@ -67,6 +68,7 @@ class InterswitchPaymentController extends Controller
         );
 
         $donation = app(\App\Services\PaymentReferenceService::class)->create([
+            'receipt_phone' => $request->input('phone'),
             'donor_id' => $donor->id,
             'project_id' => null,
             'amount' => $amountNaira,

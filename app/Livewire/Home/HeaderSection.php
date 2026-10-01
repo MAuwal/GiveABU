@@ -43,6 +43,7 @@ class HeaderSection extends Component
                     $this->user = [
                         'username' => $donorSession->username,
                         'name' => $donorSession->donor->name ?? $donorSession->username,
+                        'phone' => $donorSession->donor->phone ?? '',
                         'email' => $donorSession->donor->email ?? $donorSession->username,
                         'avatar' => $donorSession->donor->profile_image ?? null,
                     ];

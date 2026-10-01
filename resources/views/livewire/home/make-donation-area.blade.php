@@ -52,6 +52,14 @@
 
                         <form wire:submit.prevent="donate" class="donation_form">
 
+                            <div style="margin-bottom:16px;">
+                                <label for="homepageDonorPhone" style="display:block;font-size:0.73rem;font-weight:700;color:#374151;margin-bottom:7px;">Phone Number <span style="color:#ef4444;">*</span></label>
+                                <div class="mda-input-wrap">
+                                    <input id="homepageDonorPhone" type="tel" wire:model="phone" autocomplete="tel" placeholder="08012345678" required maxlength="30" class="mda-input">
+                                </div>
+                                @error('phone') <span style="color:#ef4444;font-size:0.76rem;">{{ $message }}</span> @enderror
+                            </div>
+
                             <!-- Email -->
                             <div style="margin-bottom:16px;">
                                 <label style="display:block;font-size:0.73rem;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:7px;">Email Address <span style="color:#ef4444;">*</span></label>
@@ -278,7 +286,7 @@
                     const res = await fetch('/api/squad/pay', {
                         method:'POST',
                         headers:{'Content-Type':'application/json','Accept':'application/json','X-Requested-With':'XMLHttpRequest'},
-                        body: JSON.stringify({ amount:p.amount, email:p.email, customer_name:p.customer_name||'' }),
+                        body: JSON.stringify({ amount:p.amount, email:p.email, phone:p.phone, customer_name:p.customer_name||'' }),
                     });
                     const result = await res.json();
                     if (result.checkout_url) { window.location.href = result.checkout_url; }
@@ -310,7 +318,8 @@
                         },
                         body: JSON.stringify({ 
                             amount: p.amount, 
-                            email: p.email, 
+                            email: p.email,
+                            phone: p.phone,
                             customer_name: p.customer_name || '', 
                             callback_url: window.location.origin + '/api/interswitch/redirect' 
                         }),

@@ -15,7 +15,7 @@ class PaymentSmsService
         DB::afterCommit(function () use ($donation, $gateway) {
             try {
                 $donation = $donation->fresh(['donor', 'project']);
-                if (! $donation || $donation->status !== 'completed' || ! $donation->donor?->phone) {
+                if (! $donation || $donation->status !== 'completed' || ! ($donation->receipt_phone ?: $donation->donor?->phone)) {
                     return;
                 }
                 $claim = $this->event($donation, $gateway, 'sms.claimed');
@@ -23,10 +23,11 @@ class PaymentSmsService
                     return;
                 }
                 $result = app(SmsService::class)->sendDonationConfirmationSms(
-                    $donation->donor->phone,
+                    $donation->receipt_phone ?: $donation->donor->phone,
                     trim($donation->donor->surname.' '.$donation->donor->name) ?: 'Donor',
                     $donation->amount,
-                    $donation->project?->project_title ?? 'GIVE ABU Fund'
+                    $donation->project?->project_title ?? 'GIVE ABU Fund',
+                    $donation->payment_reference
                 );
                 $this->event($donation, $gateway, $result['success'] ? 'sms.accepted' : 'sms.failed');
             } catch (\Throwable $e) {

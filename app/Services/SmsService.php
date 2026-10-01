@@ -56,9 +56,9 @@ class SmsService
      * @param  string  $project
      * @return array
      */
-    public function sendDonationConfirmationSms($phoneNumber, $name, $amount, $project)
+    public function sendDonationConfirmationSms($phoneNumber, $name, $amount, $project, $reference = '')
     {
-        $message = "Dear {$name}, thank you for your donation of ₦{$amount} to {$project}. Your contribution makes a difference!";
+        $message = "Thank you for your generous donation to ABU Zaria. Your payment of **₦{$amount}** has been received successfully.\n**Payment Reference:** {$reference}";
 
         return $this->sendSms($phoneNumber, $message, [
             'tag' => 'donation',

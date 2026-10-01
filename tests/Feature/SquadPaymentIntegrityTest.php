@@ -64,6 +64,7 @@ class SquadPaymentIntegrityTest extends TestCase
             '2026_05_08_130000_create_payment_transactions_table.php',
             '2026_05_08_175917_add_category_to_payment_transactions_table.php',
             '2026_10_01_000001_harden_donation_payment_schema.php',
+            '2026_10_01_000003_add_receipt_phone_to_donations.php',
         ] as $migration) {
             (require database_path('migrations/'.$migration))->up();
         }
@@ -578,5 +579,29 @@ class SquadPaymentIntegrityTest extends TestCase
         app(\App\Services\PaymentSmsService::class)->send($this->donation, 'squad');
         $this->assertFalse(PaymentTransaction::where('event_type', 'sms.claimed')->exists());
         Http::assertSentCount(1);
+    }
+
+    public function test_receipt_uses_submitted_phone_and_exact_requested_sms_format(): void
+    {
+        $this->donation->donor->update(['phone' => '08011111111']);
+        $this->donation->update(['receipt_phone' => '08012345678']);
+        config(['services.kudi.token' => 'test-key', 'services.kudi.url' => 'https://kudi.test/api/intcomposesms']);
+        $this->gateway();
+        Http::fake(['https://kudi.test/*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
+        $this->getJson('/api/squad/verify/'.$this->reference)->assertOk();
+        $expected = "Thank you for your generous donation to ABU Zaria. Your payment of **₦123.45** has been received successfully.\n**Payment Reference:** ".$this->reference;
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/') && $r['recipients'] === '2348012345678' && $r['message'] === $expected);
+        $this->assertSame('08011111111', $this->donation->donor->fresh()->phone);
+        $this->assertArrayNotHasKey('receipt_phone', $this->donation->fresh()->toArray());
+    }
+
+    public function test_squad_initiation_preserves_receipt_phone_without_changing_existing_donor(): void
+    {
+        Http::fake(['https://squad.test/*' => Http::response(['success' => true, 'data' => ['checkout_url' => 'https://checkout.squad.test/payment']])]);
+        $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => $this->donation->donor->email, 'phone' => '08012345678'])->assertOk();
+        $new = Donation::latest('id')->first();
+        $this->assertSame('08012345678', $new->receipt_phone);
+        $this->assertNull($this->donation->donor->fresh()->phone);
+        $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => 'donor@example.test', 'phone' => 'invalid'])->assertStatus(422);
     }
 }
