@@ -1,6 +1,6 @@
 # Stage 2: Security hardening
 
-Branch: `hardening/stage-2-security`. Built on Stage 1 because Stage 1 has not been merged. Review the Stage 2 diff against `hardening/stage-1-payment-integrity`; merge Stage 1 first and retarget Stage 2 to main. No automatic merges or deployment.
+Branch: `hardening/stage-2-security`, rebased onto latest origin/main (994e04f), which includes the final Stage 1 review fixes. Review the final diff against main. No automatic merges or deployment.
 
 ## Confirmed issues and changes
 
@@ -57,3 +57,15 @@ Squad and Interswitch send Kudi donation receipts only after server-verified com
 New references are ABU_ZARIA_SQUAD_<year>_<8 lowercase hex> and ABU_ZARIA_INTERSWITCH_<year>_<8 lowercase hex>, generated with bin2hex(random_bytes(4)). The unique donation reference index remains authoritative. A collision retries creation with a fresh reference up to five attempts using transactions/savepoints. Existing references are unchanged; no additional migration is required. Keep Stage 1 migration requirements.
 
 Stage 1 review commit 81b19e3 was carried into this branch before adding receipts, preserving the reviewed Interswitch outage and amount checks. Relevant regression tests now include both gateway SMS outcomes, email failure isolation, duplicate sends, pending-payment suppression and short-reference collision recovery.
+
+## Stage 2 PR review revisions
+
+Rebased onto merged Stage 1 main without conflicts; the already-applied Interswitch review cherry-pick was skipped. SquadPaymentService and payments:preflight match main. Payment controller differences retain only the previously requested short references and post-commit SMS additions. The separate SMS branch was not rewritten or merged.
+
+CORS allowed_origins is parsed solely from comma-separated CORS_ALLOWED_ORIGINS, with whitespace/empty entries removed and an empty default. Set this explicitly in production, for example https://giveabu.com,https://www.giveabu.com,capacitor://localhost. Add any other approved production/mobile origins explicitly. localhost HTTP, loopback and LAN origins belong only in local .env, which was not edited. Rebuild the configuration cache when deploying. There are no wildcard origin patterns.
+
+RequireRole is the single source of admin role authorization. Admin, statistics, SMS and tier-write routes declare auth:sanctum plus role:admin. ApiSecurity now only handles request quotas, retired/debug endpoints and cache headers; it does not authorize roles. AuthenticateDonor, aliased donor.auth, explicitly protects donor updates/profile, messages, history, directory/search and device/session operations and enforces token expiry and owner IDs even after model binding. Admin uploads/statistics do not require a second donor credential. Existing Sanctum-protected donor resource management is admin-only.
+
+All original security tests remain. Added tests verify explicit authentication middleware and anonymous denial across sensitive endpoints, allowed/denied CORS preflights, empty-origin configuration and donation-history isolation. Broader feature-suite baseline failures remain the old migration-order SQLite errors and missing homepage projects table. No new migration is needed for these review revisions; the existing Stage 2 token migration remains required.
+
+Final review validation: ApiSecurityTest (20), SquadPaymentIntegrityTest (42) and KudiSmsTest (8) pass: 70 tests, 413 assertions. The broader Feature suite reports 70 passed, 9 pre-existing failures, 414 assertions. All changed PHP files against main pass syntax checks; focused middleware/CORS/security-test Pint checks and diff whitespace checks pass.
