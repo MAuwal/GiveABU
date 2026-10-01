@@ -448,6 +448,42 @@ class ApiSecurityTest extends TestCase
         }
     }
 
+    public function test_reconciliation_actions_are_admin_only(): void
+    {
+        $this->get('/admin/reconciliation')->assertRedirect();
+        $role = Role::create(['role_title' => 'finance']);
+        $user = User::create(['name' => 'Finance', 'email' => 'finance@example.test', 'password' => 'password', 'role_id' => $role->id]);
+        $this->actingAs($user)->get('/admin/reconciliation')->assertForbidden();
+        $this->post('/admin/reconciliation/receipts/1')->assertForbidden();
+        $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'pending']);
+        $this->post('/admin/reconciliation/payments/'.$donation->id)->assertForbidden();
+    }
+
+    public function test_admin_can_view_reconciliation_and_queue_payment_check(): void
+    {
+        Schema::create('users_info', function (Blueprint $table) {
+            $table->id();
+            $table->integer('user_id');
+        });
+        \Illuminate\Support\Facades\Queue::fake();
+        Schema::table('donations', fn (Blueprint $table) => $table->string('payment_reference')->nullable());
+        (require database_path('migrations/2026_10_01_000005_create_payment_notification_outbox.php'))->up();
+        Schema::create('failed_jobs', function (Blueprint $table) {
+            $table->id();
+            $table->string('uuid');
+            $table->string('connection');
+            $table->string('queue');
+            $table->timestamp('failed_at');
+        });
+        $role = Role::create(['role_title' => 'admin']);
+        $user = User::create(['name' => 'Admin', 'email' => 'admin@example.test', 'password' => 'password', 'role_id' => $role->id]);
+        $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'pending', 'payment_reference' => 'ADMIN-RECONCILE']);
+        $this->actingAs($user)->get('/admin/reconciliation')->assertOk()->assertSee('ADMIN-RECONCILE')->assertSee('Failed queue jobs');
+        $this->post('/admin/reconciliation/payments/'.$donation->id)->assertRedirect();
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\VerifyPendingPayment::class, 1);
+        $this->assertSame('pending', $donation->fresh()->status);
+    }
+
     public function test_admin_website_password_recovery_uses_local_broker_link(): void
     {
         Schema::table('users', function (Blueprint $table) {

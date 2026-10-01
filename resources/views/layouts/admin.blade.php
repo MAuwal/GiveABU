@@ -151,6 +151,9 @@
                     <span>Analytics</span>
                 </a>
 
+                <a href="{{ route('admin.reconciliation') }}" class="nav-link flex items-center px-4 py-3 rounded-xl text-sm font-medium mb-2 {{ request()->routeIs('admin.reconciliation*') ? 'active' : '' }}">
+                    <div class="w-8 flex justify-center"><i class="fas fa-sync-alt"></i></div><span>Payment reconciliation</span>
+                </a>
                 <!-- Transactions -->
                 <a href="{{ route('admin.transactions') }}" class="nav-link flex items-center px-4 py-3 rounded-xl text-sm font-medium mb-2 {{ request()->routeIs('admin.transactions') ? 'active' : '' }}">
                     <div class="w-8 flex justify-center"><i class="fas fa-credit-card text-lg"></i></div>

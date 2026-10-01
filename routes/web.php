@@ -103,6 +103,9 @@ Route::prefix('admin')->group(function () {
     // Protected admin routes
     Route::middleware(['auth', 'verified', 'role:admin'])->group(function () {
         Route::get('/dashboard', [AdminController::class, 'dashboard'])->name('admin.dashboard');
+        Route::get('/reconciliation', [\App\Http\Controllers\Admin\PaymentReconciliationController::class, 'index'])->name('admin.reconciliation');
+        Route::post('/reconciliation/payments/{donation}', [\App\Http\Controllers\Admin\PaymentReconciliationController::class, 'verify'])->middleware('throttle:10,1')->name('admin.reconciliation.verify');
+        Route::post('/reconciliation/receipts/{outbox}', [\App\Http\Controllers\Admin\PaymentReconciliationController::class, 'publish'])->middleware('throttle:10,1')->name('admin.reconciliation.publish');
         Route::post('/logout', [AdminController::class, 'logout'])->name('admin.logout');
         
         // Transactions page
@@ -215,3 +218,4 @@ Route::prefix('donor')->name('donor.')->group(function () {
     Route::get('/donations/{donation}', [\App\Http\Controllers\DonorDashboardController::class, 'show'])->name('donation.show');
     Route::post('/logout', [\App\Http\Controllers\DonorDashboardController::class, 'logout'])->name('logout');
 });
+Route::get('/donation/status/{donation}', \App\Http\Controllers\PaymentStatusController::class)->middleware(['signed', 'throttle:12,1'])->name('donation.status');
