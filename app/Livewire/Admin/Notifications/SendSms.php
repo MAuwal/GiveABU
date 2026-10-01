@@ -2,16 +2,20 @@
 
 namespace App\Livewire\Admin\Notifications;
 
-use Livewire\Component;
 use App\Models\SmsLog;
 use App\Services\KudiSmsService;
+use Livewire\Component;
 
 class SendSms extends Component
 {
     public $receiver;
+
     public $message;
+
     public $sending = false;
+
     public $statusMessage;
+
     public $statusType = 'success';
 
     protected $rules = [
@@ -32,20 +36,21 @@ class SendSms extends Component
             $this->statusType = 'error';
             $this->statusMessage = 'Please enter at least one valid phone number.';
             $this->sending = false;
+
             return;
         }
 
-        $smsService = new KudiSmsService();
+        $smsService = app(KudiSmsService::class);
         $recipientString = implode(',', $recipients);
-        $result = $smsService->sendSms($recipientString, $this->message, 'ABU');
+        $result = $smsService->sendSms($recipientString, $this->message, config('services.kudi.sender_id', 'ABU'));
 
-        $responsePayload = is_array($result['response']) ? json_encode($result['response']) : (string) ($result['response'] ?? '');
-        $cost = is_array($result['response']) ? ($result['response']['cost'] ?? null) : null;
+        $responsePayload = is_array($result['response'] ?? null) ? json_encode($result['response']) : (string) ($result['response'] ?? '');
+        $cost = is_array($result['response'] ?? null) ? ($result['response']['cost'] ?? null) : null;
 
         foreach ($recipients as $recipient) {
             SmsLog::create([
                 'recipient_phone' => $recipient,
-                'sender_id' => 'ABU',
+                'sender_id' => config('services.kudi.sender_id', 'ABU'),
                 'message' => $this->message,
                 'status' => $result['success'] ? 'sent' : 'failed',
                 'error_message' => $result['success'] ? null : ($result['error'] ?? 'Failed to send SMS.'),
@@ -57,7 +62,7 @@ class SendSms extends Component
 
         if ($result['success']) {
             $this->statusType = 'success';
-            $this->statusMessage = 'SMS sent successfully to ' . count($recipients) . ' recipient' . (count($recipients) > 1 ? 's' : '') . '.';
+            $this->statusMessage = 'SMS sent successfully to '.count($recipients).' recipient'.(count($recipients) > 1 ? 's' : '').'.';
             $this->reset(['receiver', 'message']);
         } else {
             $this->statusType = 'error';
@@ -75,6 +80,7 @@ class SendSms extends Component
             ->filter()
             ->map(function ($recipient) {
                 $normalized = $this->normalizePhoneNumber($recipient);
+
                 return $normalized;
             })
             ->filter()
@@ -95,8 +101,8 @@ class SendSms extends Component
             $digits = ltrim($digits, '0');
         }
 
-        if (!str_starts_with($digits, '234') && strlen($digits) <= 10) {
-            $digits = '234' . $digits;
+        if (! str_starts_with($digits, '234') && strlen($digits) <= 10) {
+            $digits = '234'.$digits;
         }
 
         return $digits;

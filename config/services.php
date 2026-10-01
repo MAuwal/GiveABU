@@ -51,17 +51,10 @@ return [
         ],
     ],
 
-    // Ozeki SMS Gateway Configuration
-    'ozeki' => [
-        'username' => env('OZEKI_USERNAME'),
-        'password' => env('OZEKI_PASSWORD'),
-        'api_url' => env('OZEKI_API_URL', 'http://127.0.0.1:9509/api?action=rest'),
-        'enabled' => env('SMS_VERIFICATION_ENABLED', true),
-    ],
-
     'kudi' => [
         'token' => env('KUDI_SMS_KEY'),
         'url' => env('KUDI_SMS_URL', 'https://my.kudisms.net/api/intcomposesms'),
+        'sender_id' => env('KUDI_SMS_SENDER_ID', 'ABU'),
     ],
 
     // Squad Payment Configuration

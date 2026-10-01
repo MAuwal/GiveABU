@@ -38,7 +38,7 @@ class VerificationController extends Controller
         // Store code in cache for 10 minutes
         Cache::put("sms_verification_{$phone}", $code, 600);
         
-        // Send SMS using Ozeki SMS Gateway
+        // Send SMS using KudiSMS
         $smsResult = $this->smsService->sendVerificationSms($phone, $code);
         
         if ($smsResult['success']) {
