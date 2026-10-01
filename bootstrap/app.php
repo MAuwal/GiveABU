@@ -14,9 +14,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(prepend: [
             \App\Http\Middleware\ApiJsonResponse::class,
+            \App\Http\Middleware\ApiSecurity::class,
         ]);
 
         $middleware->alias([
+            'role' => \App\Http\Middleware\RequireRole::class,
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
         ]);
 

@@ -62,7 +62,7 @@ class ProjectDonations extends Component
     {
         if (Session::has('donor_token')) {
             $token = Session::get('donor_token');
-            $donorSession = DonorSession::with('donor')->find($token);
+            $donorSession = app(\App\Services\DonorTokenService::class)->resolve($token)?->load('donor');
             
             if ($donorSession && $donorSession->donor) {
                 $this->email = $donorSession->donor->email;
@@ -176,7 +176,7 @@ class ProjectDonations extends Component
         $donorId = null;
         if (Session::has('donor_token')) {
             $token = Session::get('donor_token');
-            $session = DonorSession::find($token);
+            $session = app(\App\Services\DonorTokenService::class)->resolve($token);
             $donorId = $session ? $session->donor_id : null;
         }
 

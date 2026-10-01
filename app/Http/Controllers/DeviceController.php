@@ -16,7 +16,7 @@ class DeviceController extends Controller
     {
         try {
             Log::info('Device registration attempt', [
-                'request_data' => $request->all(),
+                'request_path' => $request->path(),
                 'ip' => $request->ip(),
                 'user_agent' => $request->userAgent()
             ]);
@@ -31,15 +31,16 @@ class DeviceController extends Controller
             $expiresAt = now()->addMinutes($expiresIn);
 
             // Delete existing sessions for this device
-            DeviceSession::where('device_fingerprint', $request->device_fingerprint)->delete();
+            DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')->donor_id)
+                ->where('device_fingerprint', $request->device_fingerprint)->delete();
 
             // Generate unique session token
-            $sessionToken = bin2hex(random_bytes(32));
+            $sessionToken = app(\App\Services\DonorTokenService::class)->issue($request->attributes->get('authenticated_donor_session'));
 
             // Create new session
             $deviceSession = DeviceSession::create([
                 'donor_id' => $request->donor_id,
-                'session_token' => $sessionToken,
+                'session_token' => \Illuminate\Support\Str::random(64),
                 'device_fingerprint' => $request->device_fingerprint,
                 'expires_at' => $expiresAt,
                 'ip_address' => $request->ip(),
@@ -63,7 +64,7 @@ class DeviceController extends Controller
         } catch (\Illuminate\Validation\ValidationException $e) {
             Log::error('Device registration validation failed', [
                 'errors' => $e->errors(),
-                'request_data' => $request->all()
+                'request_path' => $request->path(),
             ]);
             return response()->json([
                 'success' => false,
@@ -72,14 +73,14 @@ class DeviceController extends Controller
             ], 422);
         } catch (\Exception $e) {
             Log::error('Device registration failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'request_data' => $request->all()
+                'exception' => get_class($e),
+
+                'request_path' => $request->path(),
             ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed',
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ], 500);
         }
     }
@@ -95,7 +96,7 @@ class DeviceController extends Controller
                 'device_fingerprint' => 'required|string'
             ]);
 
-            $session = DeviceSession::where('id', $request->session_id)
+            $session = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('id', $request->session_id)
                                    ->where('device_fingerprint', $request->device_fingerprint)
                                    ->with('donor')
                                    ->first();
@@ -128,11 +129,11 @@ class DeviceController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Session check failed: ' . $e->getMessage());
+            Log::error('Session check failed. ');
             return response()->json([
                 'valid' => false,
                 'message' => 'Check failed',
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ], 500);
         }
     }
@@ -140,10 +141,10 @@ class DeviceController extends Controller
     /**
      * Check device recognition by fingerprint
      */
-    public function checkDevice($fingerprint)
+    public function checkDevice(\Illuminate\Http\Request $request, $fingerprint)
     {
         try {
-            $deviceSession = DeviceSession::where('device_fingerprint', $fingerprint)
+            $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $fingerprint)
                                          ->where('expires_at', '>', now())
                                          ->with('donor')
                                          ->first();
@@ -174,11 +175,11 @@ class DeviceController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Device check failed: ' . $e->getMessage());
+            Log::error('Device check failed. ');
             return response()->json([
                 'recognized' => false,
                 'message' => 'Check failed',
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ], 500);
         }
     }
@@ -199,7 +200,7 @@ class DeviceController extends Controller
             }
 
             // Find device session
-            $deviceSession = DeviceSession::where('device_fingerprint', $deviceFingerprint)
+            $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $deviceFingerprint)
                                          ->where('expires_at', '>', now())
                                          ->with('donor')
                                          ->first();
@@ -237,8 +238,8 @@ class DeviceController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Error checking device recognition', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'exception' => get_class($e)
             ]);
             
             return response()->json([
@@ -263,7 +264,7 @@ class DeviceController extends Controller
             $donorId = $request->donor_id;
 
             // Check if device session already exists
-            $deviceSession = DeviceSession::where('device_fingerprint', $deviceFingerprint)->first();
+            $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $deviceFingerprint)->first();
 
             if ($deviceSession) {
                 // Update existing session
@@ -299,13 +300,13 @@ class DeviceController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Error creating device session', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'exception' => get_class($e)
             ]);
             
             return response()->json([
                 'success' => false,
-                'message' => 'Error creating device session: ' . $e->getMessage()
+                'message' => 'Error creating device session: '
             ], 500);
         }
     }
@@ -325,7 +326,7 @@ class DeviceController extends Controller
                 ], 400);
             }
 
-            $deviceSession = DeviceSession::where('device_fingerprint', $deviceFingerprint)
+            $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $deviceFingerprint)
                                          ->where('expires_at', '>', now())
                                          ->with('donor')
                                          ->first();
@@ -360,13 +361,13 @@ class DeviceController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Error getting donor info', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'exception' => get_class($e)
             ]);
             
             return response()->json([
                 'success' => false,
-                'message' => 'Error getting donor info: ' . $e->getMessage()
+                'message' => 'Error getting donor info: '
             ], 500);
         }
     }

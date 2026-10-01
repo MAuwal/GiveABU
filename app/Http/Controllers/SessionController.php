@@ -217,6 +217,7 @@ class SessionController extends Controller
      */
     public function logout(Request $request)
     {
+        app(\App\Services\DonorTokenService::class)->revoke($request);
         try {
             $sessionToken = $request->header('X-Device-Session');
             

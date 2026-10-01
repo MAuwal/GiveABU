@@ -2,12 +2,11 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use App\Models\Permission;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use App\Models\User;
-use App\Models\Role;
-use App\Models\Permission;
 
 class AdminUserSeeder extends Seeder
 {
@@ -26,22 +25,25 @@ class AdminUserSeeder extends Seeder
             ['role_title' => 'admin'],
             ['permission_id' => $perm_manage_users->id]
         );
-        
+
         // You might want to associate multiple permissions with a role.
         // The current schema (permission_id) is a one-to-one relationship.
         // This is a simplification based on the initial schema.
         // For a many-to-many relationship, you would use a pivot table.
 
         // Create admin user
-        $admin = User::firstOrCreate(
-            ['email' => 'admin@abu.edu.ng'],
-            [
-                'name' => 'Admin',
-                'password' => Hash::make('password'),
-                'role_id' => $admin_role->id,
-                'email_verified_at' => now(),
-                'verified_at' => now(),
-            ]
-        );
+        $initialPassword = config('services.security.seed_passwords.admin');
+        if (is_string($initialPassword) && strlen($initialPassword) >= 12) {
+            $admin = User::firstOrCreate(
+                ['email' => 'admin@abu.edu.ng'],
+                [
+                    'name' => 'Admin',
+                    'password' => Hash::make($initialPassword),
+                    'role_id' => $admin_role->id,
+                    'email_verified_at' => now(),
+                    'verified_at' => now(),
+                ]
+            );
+        }
     }
 }

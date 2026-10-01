@@ -21,8 +21,8 @@ class SmsService
 
         // Initialize configuration
         $this->configuration = new \Ozeki_PHP_Rest\Configuration();
-        $this->configuration->Username = config('services.ozeki.username', 'http_user');
-        $this->configuration->Password = config('services.ozeki.password', 'qwe123');
+        $this->configuration->Username = (string) config('services.ozeki.username');
+        $this->configuration->Password = (string) config('services.ozeki.password');
         $this->configuration->ApiUrl = config('services.ozeki.api_url', 'http://127.0.0.1:9509/api?action=rest');
 
         // Initialize MessageApi

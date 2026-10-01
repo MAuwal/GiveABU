@@ -28,7 +28,7 @@ class MakeDonationArea extends Component
     {
         if (Session::has('donor_token')) {
             $token        = Session::get('donor_token');
-            $donorSession = DonorSession::with('donor')->find($token);
+            $donorSession = app(\App\Services\DonorTokenService::class)->resolve($token)?->load('donor');
 
             if ($donorSession && $donorSession->donor) {
                 $this->email = $donorSession->donor->email;
@@ -148,7 +148,7 @@ class MakeDonationArea extends Component
     private function resolveDonorId(): ?int
     {
         if (Session::has('donor_token')) {
-            $session = DonorSession::find(Session::get('donor_token'));
+            $session = app(\App\Services\DonorTokenService::class)->resolve(Session::get('donor_token'));
             if ($session?->donor_id) {
                 return $session->donor_id;
             }

@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use App\Services\KudiSmsService;
 use Illuminate\Support\Facades\Validator;
+use Twilio\Rest\Client;
 
 class SmsController extends Controller
 {
@@ -33,14 +34,14 @@ class SmsController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => $result['message'] ?? 'Message sent',
-                'response' => $result['response'] ?? null,
+                'response' => null,
             ]);
         }
 
         return response()->json([
             'success' => false,
-            'error' => $result['error'] ?? 'Failed to send SMS.',
-            'response' => $result['response'] ?? null,
+            'error' => 'Failed to send SMS.',
+            'response' => null,
         ], 500);
     }
 
@@ -48,9 +49,8 @@ class SmsController extends Controller
     {
         $sid = env('TWILIO_SID');
         $token = env('TWILIO_AUTH_TOKEN');
-        $twilio = new Client($sid, $token);
-
         try {
+            $twilio = new Client($sid, $token);
             $messages = $twilio->messages->read([], 20); // last 20 messages
             $result = [];
             foreach ($messages as $msg) {
@@ -65,7 +65,7 @@ class SmsController extends Controller
             }
             return response()->json(['success' => true, 'messages' => $result]);
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+            return response()->json(['success' => false, 'error' => 'Unable to retrieve SMS messages'], 500);
         }
     }
 } 

@@ -89,59 +89,18 @@ class DonorController extends Controller
                 ], 422);
             }
 
-            // Check for authenticated session first
-            $sessionToken = $request->header('X-Device-Session');
-            $fingerprint = $request->header('X-Device-Fingerprint');
-            $donor = null;
-
-            if ($sessionToken) {
-                $deviceSession = \App\Models\DeviceSession::where('session_token', $sessionToken)->first();
-                if ($deviceSession && $deviceSession->donor_id) {
-                    $donor = Donor::find($deviceSession->donor_id);
-                }
+            $authenticated = app(\App\Services\DonorTokenService::class)->fromRequest($request);
+            if (!$authenticated && $request->hasSession()) {
+                $authenticated = app(\App\Services\DonorTokenService::class)->resolve($request->session()->get('donor_token'));
             }
-
-            if (!$donor && $fingerprint) {
-                $deviceSession = \App\Models\DeviceSession::where('device_fingerprint', $fingerprint)->first();
-                if ($deviceSession && $deviceSession->donor_id) {
-                    $donor = Donor::find($deviceSession->donor_id);
-                }
-            }
-
-            if ($donor) {
-                // Update existing donor from session - SAVE SEPARATE NAME FIELDS
-                // We trust the session donor is the correct one. 
-                // Optionally update contact info if provided and different?
-                // For now, let's update phone/names if they are provided in the form
-                $donor->name = trim($request->name);
-                $donor->surname = trim($request->surname);
-                $donor->other_name = $request->other_name ? trim($request->other_name) : null;
-                $donor->phone = $request->phone;
-                // Only update email if it's not set or if we want to allow changing email via donation form (risky)
-                // $donor->email = $request->email; 
-                $donor->save();
-            } else {
-                // Fallback: Find or create donor by email
-                $donor = Donor::where('email', $request->email)->first();
-
-                if ($donor) {
-                    // Update existing donor - SAVE SEPARATE NAME FIELDS
-                    $donor->name = trim($request->name);
-                    $donor->surname = trim($request->surname);
-                    $donor->other_name = $request->other_name ? trim($request->other_name) : null;
-                    $donor->phone = $request->phone;
-                    $donor->save();
-                } else {
-                    // Create new donor - SAVE SEPARATE NAME FIELDS
-                    $donor = Donor::create([
-                        'name' => trim($request->name),
-                        'surname' => trim($request->surname),
-                        'other_name' => $request->other_name ? trim($request->other_name) : null,
-                        'email' => $request->email,
-                        'phone' => $request->phone,
-                        'donor_type' => 'addressable_alumni', // Default type
-                    ]);
-                }
+            $donor = $authenticated?->donor;
+            if (!$donor) {
+                // Anonymous donation intent may associate an email, but never edits another profile.
+                $donor = Donor::firstOrCreate(['email' => $request->email], [
+                    'name' => trim($request->name), 'surname' => trim($request->surname),
+                    'other_name' => $request->other_name ? trim($request->other_name) : null,
+                    'phone' => $request->phone, 'donor_type' => 'addressable_alumni',
+                ]);
             }
 
             // Create donation record - INCLUDE TYPE FIELD
@@ -182,11 +141,11 @@ class DonorController extends Controller
                     'created_at' => $donation->created_at,
                     'donor' => [
                         'id' => $donor->id,
-                        'name' => $donor->name,
-                        'surname' => $donor->surname,
-                        'other_name' => $donor->other_name,
+                        'name' => $authenticated?->donor_id === $donor->id ? $donor->name : $request->name,
+                        'surname' => $authenticated?->donor_id === $donor->id ? $donor->surname : $request->surname,
+                        'other_name' => $authenticated?->donor_id === $donor->id ? $donor->other_name : $request->other_name,
                         'email' => $donor->email,
-                        'phone' => $donor->phone,
+                        'phone' => $authenticated?->donor_id === $donor->id ? $donor->phone : $request->phone,
                     ],
                 ]
             ], 201);
@@ -645,9 +604,9 @@ class DonorController extends Controller
                         'name' => $donor->department->current_name,
                         'code' => $donor->department->code ?? null
                     ] : null,
-                    'address' => $donor->address,
-                    'state' => $donor->state,
-                    'lga' => $donor->lga,
+                    'address' => null,
+                    'state' => null,
+                    'lga' => null,
                     'nationality' => $donor->nationality,
                 ];
             });

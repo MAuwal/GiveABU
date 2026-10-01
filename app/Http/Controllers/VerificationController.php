@@ -28,6 +28,11 @@ class VerificationController extends Controller
         ]);
 
         $phone = $request->phone;
+        $deliveryKey = 'otp-delivery:phone:'.hash('sha256', strtolower((string) $phone));
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($deliveryKey, 3)) {
+            return response()->json(['success' => false, 'message' => 'Too many verification requests. Try again later.'], 429);
+        }
+        \Illuminate\Support\Facades\RateLimiter::hit($deliveryKey, 600);
         $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         
         // Store code in cache for 10 minutes
@@ -46,7 +51,7 @@ class VerificationController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send SMS verification code',
-                'error' => $smsResult['error']
+                'error' => 'SMS delivery unavailable'
             ], 500);
         }
     }
@@ -62,6 +67,11 @@ class VerificationController extends Controller
             ]);
 
             $email = $request->email;
+        $deliveryKey = 'otp-delivery:email:'.hash('sha256', strtolower((string) $email));
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($deliveryKey, 3)) {
+            return response()->json(['success' => false, 'message' => 'Too many verification requests. Try again later.'], 429);
+        }
+        \Illuminate\Support\Facades\RateLimiter::hit($deliveryKey, 600);
             $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             
             // Store code in cache for 10 minutes
@@ -81,7 +91,7 @@ class VerificationController extends Controller
         } catch (\Exception $e) {
             Log::error('Email verification failed', [
                 'email' => $request->email,
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ]);
             
             return response()->json([
@@ -104,6 +114,11 @@ class VerificationController extends Controller
         $phone = $request->phone;
         $code = $request->code;
         
+        $attemptKey = 'otp-attempts:phone:'.hash('sha256', strtolower((string) $request->input('phone')));
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($attemptKey, 5)) {
+            return response()->json(['success' => false, 'message' => 'Too many verification attempts. Request a new code later.'], 429);
+        }
+        \Illuminate\Support\Facades\RateLimiter::hit($attemptKey, 600);
         $storedCode = Cache::get("sms_verification_{$phone}");
         
         if (!$storedCode || $storedCode !== $code) {
@@ -134,6 +149,11 @@ class VerificationController extends Controller
         $email = $request->email;
         $code = $request->code;
         
+        $attemptKey = 'otp-attempts:email:'.hash('sha256', strtolower((string) $request->input('email')));
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($attemptKey, 5)) {
+            return response()->json(['success' => false, 'message' => 'Too many verification attempts. Request a new code later.'], 429);
+        }
+        \Illuminate\Support\Facades\RateLimiter::hit($attemptKey, 600);
         $storedCode = Cache::get("email_verification_{$email}");
         
         if (!$storedCode || $storedCode !== $code) {

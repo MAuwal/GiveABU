@@ -1,6 +1,15 @@
 <?php
 
 return [
+    'security' => [
+        'seed_passwords' => [
+            'admin' => env('SEED_ADMIN_PASSWORD'),
+            'finance' => env('SEED_FINANCE_PASSWORD'),
+            'executive' => env('SEED_EXECUTIVE_PASSWORD'),
+        ],
+        'frontend_url' => env('FRONTEND_URL', env('APP_URL')),
+        'reset_callback_urls' => array_filter(array_map('trim', explode(',', env('RESET_CALLBACK_URLS', '')))),
+    ],
 
     /*
     |--------------------------------------------------------------------------

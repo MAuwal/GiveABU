@@ -2,14 +2,14 @@
 
 namespace Ozeki_PHP_Rest
 {
-require 'Configuration.php';
-require 'Message.php';
-require 'MessageApi_MessageSendResult.php';
-require 'MessageApi_MessageSendResults.php';
-require 'MessageApi_MessageReceiveResult.php';
-require 'MessageApi_MessageManipulateResult.php';
-require 'MessageApi_MessageDeleteResult.php';
-require 'MessageApi_MessageMarkResult.php';
+require_once 'Configuration.php';
+require_once 'Message.php';
+require_once 'MessageApi_MessageSendResult.php';
+require_once 'MessageApi_MessageSendResults.php';
+require_once 'MessageApi_MessageReceiveResult.php';
+require_once 'MessageApi_MessageManipulateResult.php';
+require_once 'MessageApi_MessageDeleteResult.php';
+require_once 'MessageApi_MessageMarkResult.php';
 	
 	class MessageApi	
 	{

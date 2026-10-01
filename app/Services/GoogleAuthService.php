@@ -2,116 +2,42 @@
 
 namespace App\Services;
 
-use Exception;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class GoogleAuthService
 {
-    protected $clientId;
-    protected $allowedClientIds = [];
-
-    public function __construct()
+    public function verifyToken($idToken): array|false
     {
-        $this->clientId = config('services.google.client_id');
-
-        // Build allowlist from comma-separated env value.
-        // Falls back to just the web client_id if GOOGLE_ALLOWED_CLIENT_IDS is not set.
-        $raw = config('services.google.allowed_client_ids', $this->clientId);
-        $this->allowedClientIds = array_filter(
-            array_map('trim', explode(',', (string) $raw))
-        );
-    }
-
-    /**
-     * Verify Google ID token using Google's tokeninfo endpoint.
-     * Google validates the signature, expiry, and issuer server-side.
-     * We only need to check the audience (aud) matches our client ID.
-     *
-     * @param string $idToken  The Google ID token from the frontend
-     * @return array|false     User data array on success, false on failure
-     */
-    public function verifyToken($idToken)
-    {
+        $audiences = array_filter(array_map('trim', explode(',', (string) config('services.google.allowed_client_ids', config('services.google.client_id')))));
+        if (! $audiences || ! is_string($idToken) || $idToken === '' || strlen($idToken) > 16384) {
+            return false;
+        }
         try {
-            if (empty($idToken)) {
-                Log::error('GoogleAuthService: Empty token received');
-                return false;
-            }
-
-            Log::info('Google Token Verification - Start', [
-                'token_length'   => strlen($idToken),
-                'token_preview'  => substr($idToken, 0, 30) . '...',
-                'client_id'      => $this->clientId,
-                'client_id_set'  => !empty($this->clientId),
-            ]);
-
-            // Ask Google to verify the token (signature + expiry + issuer)
-            $response = Http::timeout(10)
-                ->get('https://oauth2.googleapis.com/tokeninfo', [
-                    'id_token' => $idToken,
-                ]);
-
-            if (!$response->successful()) {
-                Log::error('Google Token Verification - tokeninfo request failed', [
-                    'status'   => $response->status(),
-                    'body'     => $response->body(),
-                ]);
-                return false;
-            }
-
+            // Existing server-side Google verification remains the signature authority.
+            // Never log the bearer ID token, query URL, payload or provider error body.
+            $response = Http::connectTimeout(5)->timeout(10)->get('https://oauth2.googleapis.com/tokeninfo', ['id_token' => $idToken]);
             $payload = $response->json();
-
-            Log::info('Google Token - tokeninfo response', [
-                'aud'            => $payload['aud'] ?? null,
-                'email'          => $payload['email'] ?? null,
-                'email_verified' => $payload['email_verified'] ?? null,
-                'exp'            => $payload['exp'] ?? null,
-            ]);
-
-            // Verify the audience matches one of our allowed client IDs.
-            // allowedClientIds contains the web client ID + any Android/iOS client IDs
-            // listed in GOOGLE_ALLOWED_CLIENT_IDS (comma-separated).
-            if (!empty($this->allowedClientIds) && isset($payload['aud'])
-                && !in_array($payload['aud'], $this->allowedClientIds, true)) {
-                Log::error('Google Token - Client ID (aud) not in allowlist', [
-                    'expected_one_of' => $this->allowedClientIds,
-                    'got'             => $payload['aud'],
-                ]);
+            if (! $response->successful() || ! is_array($payload)
+                || ! in_array($payload['aud'] ?? null, $audiences, true)
+                || ! in_array($payload['iss'] ?? null, ['accounts.google.com', 'https://accounts.google.com'], true)
+                || ! ctype_digit((string) ($payload['exp'] ?? '')) || (int) $payload['exp'] <= now()->timestamp
+                || ! is_string($payload['sub'] ?? null) || $payload['sub'] === ''
+                || ! filter_var($payload['email'] ?? '', FILTER_VALIDATE_EMAIL)
+                || ! filter_var($payload['email_verified'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
                 return false;
             }
-
-            // Require a verified email
-            if (empty($payload['email'])) {
-                Log::error('Google Token - Missing email in payload');
-                return false;
-            }
-
-            $emailVerified = filter_var($payload['email_verified'] ?? false, FILTER_VALIDATE_BOOLEAN);
-            if (!$emailVerified) {
-                Log::error('Google Token - Email not verified', ['email' => $payload['email']]);
-                return false;
-            }
-
-            Log::info('Google Token - Verification successful', ['email' => $payload['email']]);
 
             return [
-                'google_id'      => $payload['sub'] ?? null,
-                'email'          => $payload['email'],
-                'email_verified' => $emailVerified,
-                'name'           => $payload['name'] ?? null,
-                'given_name'     => $payload['given_name'] ?? null,
-                'family_name'    => $payload['family_name'] ?? null,
-                'picture'        => $payload['picture'] ?? null,
-                'gender'         => $payload['gender'] ?? null,
-                'locale'         => $payload['locale'] ?? null,
+                'email_authoritative' => str_ends_with(strtolower($payload['email']), '@gmail.com') || ! empty($payload['hd']),
+                'google_id' => $payload['sub'], 'email' => $payload['email'], 'email_verified' => true,
+                'name' => $payload['name'] ?? null, 'given_name' => $payload['given_name'] ?? null,
+                'family_name' => $payload['family_name'] ?? null, 'picture' => $payload['picture'] ?? null,
+                'gender' => $payload['gender'] ?? null, 'locale' => $payload['locale'] ?? null,
             ];
+        } catch (\Throwable $e) {
+            Log::warning('Google authentication unavailable', ['exception' => get_class($e)]);
 
-        } catch (Exception $e) {
-            Log::error('GoogleAuthService: Token verification exception', [
-                'message' => $e->getMessage(),
-                'trace'   => $e->getTraceAsString(),
-            ]);
             return false;
         }
     }

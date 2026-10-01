@@ -8,6 +8,8 @@ class DonorResource extends JsonResource
 {
     public function toArray($request)
     {
+        $session = $request->attributes->get('authenticated_donor_session');
+        $private = $session && (int) $session->donor_id === (int) $this->id;
         return [
             'id' => $this->id,
             'name' => $this->name,
@@ -15,17 +17,17 @@ class DonorResource extends JsonResource
             'surname' => $this->surname,
             'other_name' => $this->other_name,
             'email' => $this->email,
-            'alt_email' => $this->alt_email,
+            'alt_email' => $private ? $this->alt_email : null,
             'phone' => $this->phone,
             'reg_number' => $this->reg_number,
             'registration_number' => $this->reg_number, // For compatibility
             'entry_year' => $this->entry_year,
             'graduation_year' => $this->graduation_year,
-            'address' => $this->address,
-            'state' => $this->state,
-            'lga' => $this->lga,
+            'address' => $private ? $this->address : null,
+            'state' => $private ? $this->state : null,
+            'lga' => $private ? $this->lga : null,
             'nationality' => $this->nationality,
-            'nin' => $this->nin,
+            'nin' => $private ? $this->nin : null,
             'donor_type' => $this->donor_type,
             'ranking' => $this->ranking,
             'faculty_name' => $this->whenLoaded('faculty', function() {

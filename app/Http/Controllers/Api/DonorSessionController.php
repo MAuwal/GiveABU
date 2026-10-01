@@ -25,11 +25,15 @@ class DonorSessionController extends Controller
      */
     public function register(Request $request)
     {
+        if ($request->filled('donor_id') || $request->filled('device_session_id')
+            || Donor::where('email', $request->input('username'))->exists()) {
+            return response()->json(['success' => false, 'message' => 'Use verified account recovery or sign in to link an existing profile.'], 409);
+        }
         try {
             // Build validation rules
             $rules = [
                 'username' => 'required|string|min:3|max:255|unique:donor_sessions,username',
-                'password' => 'required|string|min:6',
+                'password' => 'required|string|min:8',
                 'device_session_id' => 'nullable|exists:device_sessions,id',
             ];
 
@@ -73,9 +77,10 @@ class DonorSessionController extends Controller
                 'username' => $request->username,
                 'password' => $request->password, // Will be hashed automatically via mutator
                 'donor_id' => $request->donor_id ?? null, // ✅ Can be null
-                'device_session_id' => $request->device_session_id ?? null,
+                'device_session_id' => null,
                 'auth_provider' => 'email', // Explicitly set to email for traditional registration
             ]);
+            $accessToken = app(\App\Services\DonorTokenService::class)->issue($donorSession);
             $donorSession->load('donor');
             $donorSummary = $this->summarizeDonations($donorSession->donor);
 
@@ -87,8 +92,10 @@ class DonorSessionController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => $message,
+                'token' => $accessToken,
                 'data' => [
                     'id' => $donorSession->id,
+                    'session_token' => $accessToken,
                     'username' => $donorSession->username,
                     'donor' => $donorSession->donor, // Will be null if donor_id is null
                     'device_session_id' => $donorSession->device_session_id,
@@ -98,15 +105,14 @@ class DonorSessionController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Registration error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'request_data' => $request->all()
+                'exception' => get_class($e),
+
+                'request_path' => $request->path(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Registration failed: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Registration failed. '], 500);
         }
     }
 
@@ -150,12 +156,12 @@ class DonorSessionController extends Controller
 
         // Re-associate this device fingerprint with the currently authenticating donor
         $deviceSession = DeviceSession::updateOrCreate(
-            ['device_fingerprint' => $fingerprint],
+            ['device_fingerprint' => $fingerprint, 'donor_id' => $donorSession->donor_id],
             [
                 'donor_id' => $donorSession->donor_id,
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent() ?? 'unknown',
-                'expires_at' => now()->addYears(10), // Persistent device session
+                'expires_at' => now()->addDays(30), // Persistent device session
             ]
         );
 
@@ -178,6 +184,12 @@ class DonorSessionController extends Controller
      */
     public function login(Request $request)
     {
+        // Also protect direct calls from the web login component.
+        $loginKey = 'donor-login:'.hash('sha256', $request->ip().'|'.strtolower((string) $request->input('username')));
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($loginKey, 10)) {
+            return response()->json(['success' => false, 'message' => 'Too many login attempts. Try again later.'], 429);
+        }
+        \Illuminate\Support\Facades\RateLimiter::hit($loginKey, 60);
         try {
             $validator = Validator::make($request->all(), [
                 'username' => 'required|string',
@@ -230,6 +242,7 @@ class DonorSessionController extends Controller
             }
 
             // Handle persistent device session
+            $accessToken = app(\App\Services\DonorTokenService::class)->issue($donorSession);
             $deviceSession = $this->handleDeviceSession($donorSession, $request);
 
             // Load donor relationship with latest data
@@ -239,13 +252,13 @@ class DonorSessionController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Login successful',
-                'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                'token' => $accessToken,
                 'data' => [
                     'session_id' => $donorSession->id,
                     'username' => $donorSession->username,
                     'donor' => $donorSession->donor,
                     'device_session_id' => $donorSession->device_session_id,
-                    'session_token' => $deviceSession ? $deviceSession->session_token : null,
+                    'session_token' => $accessToken,
                     'donor_summary' => $donorSummary,
                 ]
             ], 200);
@@ -253,8 +266,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Login failed: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Login failed. '], 500);
         }
     }
 
@@ -263,6 +275,7 @@ class DonorSessionController extends Controller
      */
     public function logout(Request $request)
     {
+        app(\App\Services\DonorTokenService::class)->revoke($request);
         try {
             // Note: We intentionally DO NOT expire or delete the DeviceSession record here.
             // Preserving the DeviceSession allows soft device recognition to recognize the
@@ -276,8 +289,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Logout failed: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Logout failed. '], 500);
         }
     }
 
@@ -336,7 +348,9 @@ class DonorSessionController extends Controller
 
             // If donor is still null but we have a matching email, try auto-linking
             if (!$donorSession->donor && filter_var($donorSession->username, FILTER_VALIDATE_EMAIL)) {
-                $this->ensureSessionHasDonor($donorSession);
+                if ($donorSession->email_verified_at || $donorSession->isGoogleAuth()) {
+                    $this->ensureSessionHasDonor($donorSession);
+                }
             }
             $donorSession->loadMissing('donor');
             $donorSummary = $this->summarizeDonations($donorSession->donor);
@@ -356,7 +370,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to retrieve session: ' . $e->getMessage()
+                'message' => 'Failed to retrieve session: '
             ], 500);
         }
     }
@@ -550,15 +564,14 @@ class DonorSessionController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Error creating/updating donor profile', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'request_data' => $request->all()
+                'exception' => get_class($e),
+
+                'request_path' => $request->path(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to create/update profile: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Failed to create/update profile. '], 500);
         }
     }
 
@@ -633,7 +646,7 @@ class DonorSessionController extends Controller
             }
 
             // Find device session
-            $deviceSession = DeviceSession::where('device_fingerprint', $deviceFingerprint)
+            $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $deviceFingerprint)
                 ->with('donor')
                 ->first();
 
@@ -667,7 +680,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to check device: ' . $e->getMessage()
+                'message' => 'Failed to check device: '
             ], 500);
         }
     }
@@ -693,6 +706,11 @@ class DonorSessionController extends Controller
             }
 
             $session = DonorSession::findOrFail($sessionId);
+            if (Donor::where('email', $request->username)->where('id', '!=', $session->donor_id ?? 0)->exists()) {
+                return response()->json(['success' => false, 'message' => 'Account identity cannot be linked to another donor.'], 409);
+            }
+            $session->email_verified_at = null;
+            $session->email_verification_token = null;
             $session->username = $request->username;
             $session->save();
 
@@ -714,7 +732,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error updating username: ' . $e->getMessage()
+                'message' => 'Error updating username: '
             ], 500);
         }
     }
@@ -729,7 +747,7 @@ class DonorSessionController extends Controller
         try {
             $validator = Validator::make($request->all(), [
                 'current_password' => 'required|string',
-                'new_password' => 'required|string|min:6|confirmed',
+                'new_password' => 'required|string|min:8|confirmed',
             ]);
 
             if ($validator->fails()) {
@@ -753,6 +771,7 @@ class DonorSessionController extends Controller
             // Update password (will be hashed automatically via mutator)
             $session->password = $request->new_password;
             $session->save();
+            app(\App\Services\DonorTokenService::class)->revokeAll($session->id);
 
             return response()->json([
                 'success' => true,
@@ -767,7 +786,7 @@ class DonorSessionController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error updating password: ' . $e->getMessage()
+                'message' => 'Error updating password: '
             ], 500);
         }
     }
@@ -842,6 +861,7 @@ class DonorSessionController extends Controller
                 }
 
                 // Handle persistent device session
+                $accessToken = app(\App\Services\DonorTokenService::class)->issue($donorSession);
                 $deviceSession = $this->handleDeviceSession($donorSession, $request);
 
                 // Also update donor record if needed
@@ -874,20 +894,24 @@ class DonorSessionController extends Controller
                 return response()->json([
                     'success' => true,
                     'message' => 'Google login successful',
-                    'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                    'token' => $accessToken,
                     'data' => [
                         'session_id' => $donorSession->id,
                         'username' => $donorSession->username,
                         'donor' => $donorSession->donor,
                         'device_session_id' => $donorSession->device_session_id,
-                        'session_token' => $deviceSession ? $deviceSession->session_token : null,
-                        'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                        'session_token' => $accessToken,
+                        'token' => $accessToken,
                     ]
                 ], 200);
             }
 
             // Google account doesn't exist - check if email exists in donors table
             $donor = Donor::where('email', $googleUser['email'])->first();
+            if ($donor && ! ($googleUser['email_authoritative'] ?? false)) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Please use your existing account credentials to access this donor profile.'], 409);
+            }
 
             if (!$donor) {
                 // Create new donor record
@@ -924,11 +948,19 @@ class DonorSessionController extends Controller
             // Check if a donor_session already exists with this username (email)
             $existingSession = DonorSession::where('username', $googleUser['email'])->first();
             
+            if ($existingSession && $existingSession->auth_provider !== 'google') {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Please sign in with your existing account before linking Google.'], 409);
+            }
+            if ($existingSession && $existingSession->google_id !== $googleUser['google_id']) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Google account identity does not match.'], 409);
+            }
             if ($existingSession) {
                 // Update existing session instead of creating new one
                 $existingSession->update([
                     'donor_id' => $donor->id,
-                    'device_session_id' => $validated['device_session_id'] ?? null,
+                    'device_session_id' => null,
                     'auth_provider' => 'google',
                     'google_id' => $googleUser['google_id'],
                     'google_email' => $googleUser['email'],
@@ -949,7 +981,7 @@ class DonorSessionController extends Controller
                     'username' => $googleUser['email'], // Use email as username
                     'password' => null, // No password for Google auth
                     'donor_id' => $donor->id,
-                    'device_session_id' => $validated['device_session_id'] ?? null,
+                    'device_session_id' => null,
                     'auth_provider' => 'google',
                     'google_id' => $googleUser['google_id'],
                     'google_email' => $googleUser['email'],
@@ -965,6 +997,7 @@ class DonorSessionController extends Controller
             }
 
             // Handle persistent device session
+            $accessToken = app(\App\Services\DonorTokenService::class)->issue($donorSession);
             $deviceSession = $this->handleDeviceSession($donorSession, $request);
 
             // Load donor relationship
@@ -975,26 +1008,25 @@ class DonorSessionController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Google login successful',
-                'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                'token' => $accessToken,
                 'data' => [
                     'session_id' => $donorSession->id,
                     'username' => $donorSession->username,
                     'donor' => $donorSession->donor,
                     'device_session_id' => $donorSession->device_session_id,
-                    'session_token' => $deviceSession ? $deviceSession->session_token : null,
-                    'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                    'session_token' => $accessToken,
+                    'token' => $accessToken,
                 ]
             ], 200);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Google login error: ' . $e->getMessage());
-            Log::error('Stack trace: ' . $e->getTraceAsString());
+            Log::error('Google login error. ');
+            Log::error('Authentication operation failed', ['exception' => get_class($e)]);
             
             return response()->json([
                 'success' => false,
-                'message' => 'Google login failed: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Google login failed. '], 500);
         }
     }
 
@@ -1053,6 +1085,10 @@ class DonorSessionController extends Controller
 
             // Check if email already exists in donors table
             $donor = Donor::where('email', $googleUser['email'])->first();
+            if ($donor && ! ($googleUser['email_authoritative'] ?? false)) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Please use your existing account credentials to access this donor profile.'], 409);
+            }
 
             if (!$donor) {
                 // Create new donor record with Google information
@@ -1104,7 +1140,7 @@ class DonorSessionController extends Controller
                 'username' => $googleUser['email'], // Use email as username
                 'password' => null, // No password for Google auth
                 'donor_id' => $donor->id,
-                'device_session_id' => $validated['device_session_id'] ?? null,
+                'device_session_id' => null,
                 'auth_provider' => 'google',
                 'google_id' => $googleUser['google_id'],
                 'google_email' => $googleUser['email'],
@@ -1113,6 +1149,7 @@ class DonorSessionController extends Controller
             ]);
 
             // Handle persistent device session
+            $accessToken = app(\App\Services\DonorTokenService::class)->issue($donorSession);
             $deviceSession = $this->handleDeviceSession($donorSession, $request);
 
             // Load donor relationship
@@ -1123,26 +1160,25 @@ class DonorSessionController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Google registration successful',
-                'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                'token' => $accessToken,
                 'data' => [
                     'session_id' => $donorSession->id,
                     'username' => $donorSession->username,
                     'donor' => $donorSession->donor,
                     'device_session_id' => $donorSession->device_session_id,
-                    'session_token' => $deviceSession ? $deviceSession->session_token : null,
-                    'token' => $deviceSession ? $deviceSession->session_token : $donorSession->id,
+                    'session_token' => $accessToken,
+                    'token' => $accessToken,
                 ]
             ], 201);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Google registration error: ' . $e->getMessage());
-            Log::error('Stack trace: ' . $e->getTraceAsString());
+            Log::error('Google registration error. ');
+            Log::error('Authentication operation failed', ['exception' => get_class($e)]);
             
             return response()->json([
                 'success' => false,
-                'message' => 'Google registration failed: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Google registration failed. '], 500);
         }
     }
 
@@ -1177,7 +1213,7 @@ class DonorSessionController extends Controller
             Mail::to($donorSession->username)->send(new \App\Mail\EmailVerificationMail($verificationUrl, $recipientName));
         } catch (\Exception $e) {
             Log::error('Failed to send verification email', [
-                'error'      => $e->getMessage(),
+                'exception' => get_class($e),
                 'session_id' => $donorSession->id,
             ]);
         }
@@ -1238,7 +1274,11 @@ class DonorSessionController extends Controller
     private function buildResetUrl(string $token, ?string $callbackUrl = null): string
     {
         // Use provided callback URL or fallback to config
-        $base = $callbackUrl ? rtrim($callbackUrl, '/') : rtrim(env('FRONTEND_URL', config('app.url')), '/');
+        $base = rtrim(config('services.security.frontend_url', config('app.url')), '/');
+        if ($callbackUrl) {
+            abort_unless(in_array(rtrim($callbackUrl, '/'), config('services.security.reset_callback_urls', []), true), 422);
+            $base = rtrim($callbackUrl, '/');
+        }
         
         // If the callback URL already contains the path, just append query param
         if (strpos($base, '/reset-password') !== false) {
@@ -1260,6 +1300,9 @@ class DonorSessionController extends Controller
 
         $email = $request->input('email');
         $callbackUrl = $request->input('callback_url');
+        if ($callbackUrl && !in_array(rtrim($callbackUrl, '/'), config('services.security.reset_callback_urls', []), true)) {
+            return response()->json(['success' => false, 'message' => 'Reset callback URL is not approved.'], 422);
+        }
         
         $donorSession = DonorSession::where('username', $email)
             ->where(function ($query) {
@@ -1303,7 +1346,7 @@ class DonorSessionController extends Controller
             Mail::to($donorSession->username)->send(new PasswordResetLinkMail($resetUrl, $donorSession->username));
         } catch (\Exception $e) {
             Log::error('Failed to send password reset email', [
-                'error' => $e->getMessage(),
+                'exception' => get_class($e),
                 'session_id' => $donorSession->id,
             ]);
         }
@@ -1339,27 +1382,24 @@ class DonorSessionController extends Controller
     public function resetPasswordWithToken(Request $request, string $token)
     {
         $request->validate([
-            'password' => 'required|string|confirmed|min:6',
+            'password' => 'required|string|confirmed|min:8',
         ]);
 
-        $record = $this->validateResetToken($token);
-
-        if (!$record) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid or expired token.',
-            ], 404);
+        $reset = DB::transaction(function () use ($request, $token) {
+            $record = PasswordReset::where('token', $token)->where('used', false)
+                ->where('expires_at', '>', now())->lockForUpdate()->first();
+            if (!$record) {
+                return false;
+            }
+            $session = DonorSession::whereKey($record->donor_session_id)->lockForUpdate()->firstOrFail();
+            $session->update(['password' => $request->password]);
+            app(\App\Services\DonorTokenService::class)->revokeAll($session->id);
+            PasswordReset::where('donor_session_id', $session->id)->where('used', false)->update(['used' => true]);
+            return true;
+        }, 5);
+        if (!$reset) {
+            return response()->json(['success' => false, 'message' => 'Invalid or expired token.'], 404);
         }
-
-        $donorSession = $record->donorSession;
-        $donorSession->update([
-            'password' => $request->password,
-        ]);
-
-        $record->markAsUsed();
-        PasswordReset::where('donor_session_id', $donorSession->id)
-            ->where('used', false)
-            ->update(['used' => true]);
 
         return response()->json([
             'success' => true,

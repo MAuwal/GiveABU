@@ -9,6 +9,8 @@ class DeviceSession extends Model
 {
     use HasFactory;
 
+    protected $hidden = ['session_token'];
+
     protected $fillable = [
         'donor_id',
         'session_token',

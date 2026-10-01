@@ -2,11 +2,11 @@
 
 namespace Database\Seeders;
 
+use App\Models\Permission;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use App\Models\User;
-use App\Models\Role;
-use App\Models\Permission;
 
 class RoleAndUserSeeder extends Seeder
 {
@@ -41,40 +41,48 @@ class RoleAndUserSeeder extends Seeder
         );
 
         // Create Admin User
-        User::firstOrCreate(
-            ['email' => 'admin@abu.edu.ng'],
-            [
-                'name' => 'System Administrator',
-                'password' => Hash::make('admin123'),
-                'role_id' => $adminRole->id,
-                'email_verified_at' => now(),
-                'verified_at' => now(),
-            ]
-        );
+        $initialPassword = config('services.security.seed_passwords.admin');
+        if (is_string($initialPassword) && strlen($initialPassword) >= 12) {
+            User::firstOrCreate(
+                ['email' => 'admin@abu.edu.ng'],
+                [
+                    'name' => 'System Administrator',
+                    'password' => Hash::make($initialPassword),
+                    'role_id' => $adminRole->id,
+                    'email_verified_at' => now(),
+                    'verified_at' => now(),
+                ]
+            );
+        }
 
         // Create Finance User
-        User::firstOrCreate(
-            ['email' => 'finance@abu.edu.ng'],
-            [
-                'name' => 'Finance Manager',
-                'password' => Hash::make('finance123'),
-                'role_id' => $financeRole->id,
-                'email_verified_at' => now(),
-                'verified_at' => now(),
-            ]
-        );
+        $initialPassword = config('services.security.seed_passwords.finance');
+        if (is_string($initialPassword) && strlen($initialPassword) >= 12) {
+            User::firstOrCreate(
+                ['email' => 'finance@abu.edu.ng'],
+                [
+                    'name' => 'Finance Manager',
+                    'password' => Hash::make($initialPassword),
+                    'role_id' => $financeRole->id,
+                    'email_verified_at' => now(),
+                    'verified_at' => now(),
+                ]
+            );
+        }
 
         // Create Executive User
-        User::firstOrCreate(
-            ['email' => 'executive@abu.edu.ng'],
-            [
-                'name' => 'Executive Director',
-                'password' => Hash::make('executive123'),
-                'role_id' => $executiveRole->id,
-                'email_verified_at' => now(),
-                'verified_at' => now(),
-            ]
-        );
+        $initialPassword = config('services.security.seed_passwords.executive');
+        if (is_string($initialPassword) && strlen($initialPassword) >= 12) {
+            User::firstOrCreate(
+                ['email' => 'executive@abu.edu.ng'],
+                [
+                    'name' => 'Executive Director',
+                    'password' => Hash::make($initialPassword),
+                    'role_id' => $executiveRole->id,
+                    'email_verified_at' => now(),
+                    'verified_at' => now(),
+                ]
+            );
+        }
     }
 }
-
