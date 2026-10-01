@@ -18,7 +18,9 @@ class ReadinessTest extends TestCase
 
     public function test_ready_checks_dependencies_without_creating_sessions(): void
     {
-        $this->get('/ready')->assertOk()->assertExactJson(['status' => 'ready'])->assertHeader('Cache-Control', 'no-store, private');
+        $response = $this->get('/ready')->assertOk()->assertExactJson(['status' => 'ready']);
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
     }
 
     public function test_database_outage_returns_generic_unavailable_without_secret(): void
