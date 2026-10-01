@@ -616,14 +616,14 @@ class SquadPaymentIntegrityTest extends TestCase
         $tier = \App\Models\DonorTier::create(['name' => 'General Supporter', 'min_amount' => 0, 'is_active' => true, 'sort_order' => 1]);
         \App\Models\EmailTemplate::create(['name' => 'Receipt', 'slug' => 'receipt', 'donor_tier_id' => $tier->id,
             'is_active' => true, 'subject' => 'Donation {{created_at}}',
-            'body_html' => 'Date: {{created_at}} / {{ created_at }} / [created_at] / {{donation_date}}']);
+            'body_html' => 'Date: {{created_at}} / {{ created_at }} / [created_at] / {{donation_date}} — ABU Endowment Fund Team']);
         $this->donation->forceFill(['status' => 'completed', 'created_at' => '2026-09-20 09:00:00',
             'paid_at' => '2026-09-22 10:00:00', 'verified_at' => '2026-09-23 10:00:00'])->save();
-        Mail::shouldReceive('html')->once()->with('Date: 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026', \Mockery::type('callable'));
+        Mail::shouldReceive('html')->once()->with('Date: 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 — GiveABU Team', \Mockery::type('callable'));
         $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
         $this->assertSame('sent', \App\Models\EmailLog::firstOrFail()->status);
         $this->donation->forceFill(['paid_at' => null, 'verified_at' => null])->save();
-        Mail::shouldReceive('html')->once()->with('Date: 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026', \Mockery::type('callable'));
+        Mail::shouldReceive('html')->once()->with('Date: 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 — GiveABU Team', \Mockery::type('callable'));
         $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
     }
 }

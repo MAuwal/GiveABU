@@ -92,6 +92,7 @@ class TierNotificationService
 
         // Decode HTML entities in case the template was saved via the old Trix editor
         $rawHtml = html_entity_decode($template->body_html ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $rawHtml = str_replace('ABU Endowment Fund Team', 'GiveABU Team', $rawHtml);
 
         // Replace any logo filename references with the absolute production URL
         $rawHtml = $this->fixLogoImageUrls($rawHtml, $logoUrl);
