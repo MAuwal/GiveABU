@@ -66,7 +66,7 @@ class InterswitchPaymentController extends Controller
             ]
         );
 
-        $donation = Donation::create([
+        $donation = app(\App\Services\PaymentReferenceService::class)->create([
             'donor_id' => $donor->id,
             'project_id' => null,
             'amount' => $amountNaira,
@@ -74,8 +74,7 @@ class InterswitchPaymentController extends Controller
             'frequency' => 'onetime',
             'endowment' => 'yes',
             'status' => 'pending',
-            'payment_reference' => 'ABU_ZARIA_INTERSWITCH_'.time().'_'.uniqid(),
-        ]);
+        ], 'interswitch');
 
         $this->upsertTransaction($donation->payment_reference, [
             'donation_id' => $donation->id,
@@ -238,6 +237,7 @@ class InterswitchPaymentController extends Controller
             return ['status' => $locked->status, 'reason' => 'pending'];
         }, 5);
         if ($result['changed'] ?? false) {
+            app(\App\Services\PaymentSmsService::class)->send($donation, 'interswitch');
             $this->sendThankYouEmail($donation->fresh());
             try {
                 app(TierNotificationService::class)->handleDonationTierCheck($donation->fresh());

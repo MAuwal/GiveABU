@@ -9,6 +9,7 @@ class PaymentNotificationService
 {
     public function send(Donation $donation): void
     {
+        app(PaymentSmsService::class)->send($donation, 'squad');
         // Claim once before external effects: retries cannot duplicate an email.
         // A crash/failure requires manual reconciliation; this is not exactly-once mail delivery.
         $claim = app(SquadPaymentService::class)->event($donation, 'notification.claimed');

@@ -373,6 +373,7 @@ class PaymentController extends Controller
                         $this->updateProjectRaised($donation->project_id, $donation->id);
                     }
 
+                    app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
                     $this->sendThankYouEmail($donation);
                     (new TierNotificationService())->handleDonationTierCheck($donation);
                 } elseif ($donation) {
@@ -578,6 +579,7 @@ class PaymentController extends Controller
         }
 
         // Send thank you email and tier notification
+        app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
         $this->sendThankYouEmail($donation);
         (new TierNotificationService())->handleDonationTierCheck($donation);
 
