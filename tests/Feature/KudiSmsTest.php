@@ -16,13 +16,13 @@ class KudiSmsTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_verification_uses_kudi_post_and_retains_response_keys(): void
+    public function test_verification_uses_existing_kudi_get_contract_and_retains_response_keys(): void
     {
         Http::fake(['https://kudi.test/*' => Http::response(['status' => 'success', 'error_code' => '000', 'data' => '2348012345678|message-id'])]);
         $this->postJson('/api/verification/send-sms', ['phone' => '08012345678'])->assertOk()->assertJsonPath('success', true)->assertJsonPath('message_id', 'message-id');
-        Http::assertSent(fn ($r) => $r->method() === 'POST' && ! str_contains($r->url(), 'test-api-key')
+        Http::assertSent(fn ($r) => $r->method() === 'GET'
             && $r['token'] === 'test-api-key' && $r['recipients'] === '2348012345678'
-            && $r['country_id'] === '234' && str_contains($r['message'], 'verification code'));
+            && $r['gateway'] === 2 && str_contains($r['message'], 'verification code'));
         Http::assertSentCount(1);
     }
 

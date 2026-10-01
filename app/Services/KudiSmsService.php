@@ -22,15 +22,11 @@ class KudiSmsService
             return $this->failure('Please enter a valid recipient phone number.');
         }
         $fields = ['token' => $token, 'senderID' => $senderId, 'recipients' => $recipients, 'message' => $message];
-        if (str_ends_with(parse_url($url, PHP_URL_PATH) ?? '', '/intcomposesms')) {
-            $fields['country_id'] = $defaultCountryId;
-        } else {
-            $fields['gateway'] = 2;
-        }
+        $fields['gateway'] = 2;
         try {
-            // POST keeps API keys and message contents out of query URLs. Never
-            // retry automatically: an ambiguous timeout may already have sent SMS.
-            $response = Http::acceptJson()->asForm()->connectTimeout(5)->timeout(15)->post($url, $fields);
+            // Preserve the existing merchant integration's GET contract.
+            // Never log query URLs, tokens or message contents, or retry a send.
+            $response = Http::acceptJson()->connectTimeout(5)->timeout(15)->get($url, $fields);
             $payload = $response->json();
             if (! $response->successful() || ! is_array($payload)
                 || strtolower((string) ($payload['status'] ?? '')) !== 'success'
