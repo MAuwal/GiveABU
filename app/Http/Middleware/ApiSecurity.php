@@ -2,10 +2,8 @@
 
 namespace App\Http\Middleware;
 
-use App\Services\DonorTokenService;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
 
 class ApiSecurity
@@ -37,45 +35,8 @@ class ApiSecurity
             }
             RateLimiter::hit($key, 60);
         }
-        $admin = $request->is('api/admin/*', 'api/statistics/*', 'api/send-sms', 'api/sms-messages')
-            || ($request->is('api/donor-tiers', 'api/donor-tiers/*') && ! $request->isMethod('GET'));
-        if ($admin) {
-            $user = Auth::guard('sanctum')->user();
-            abort_unless($user, 401);
-            abort_unless(strtolower($user->role?->role_title ?? '') === 'admin', 403);
-        }
-        $private = $request->is('api/messages', 'api/messages/*', 'api/donor/*/messages',
-            'api/donors', 'api/donors/*', 'api/alumni/*', 'api/donations/history',
-            'api/device/*', 'api/devices/register', 'api/devices/check/*', 'api/sessions/check',
-            'api/session/check', 'api/session/logout') && ! ($path === 'api/donors' && $request->isMethod('POST'));
-        $private = $private || $request->is('api/donor-sessions/me', 'api/donor-sessions/logout',
-            'api/donor-sessions/profile', 'api/donor-sessions/check-device', 'api/donor-sessions/send-verification',
-            'api/donor-sessions/*/username', 'api/donor-sessions/*/password');
-        if ($private && ! $admin) {
-            $session = app(DonorTokenService::class)->fromRequest($request);
-            abort_unless($session, 401);
-            $request->attributes->set('authenticated_donor_session', $session);
-            $id = $request->route('id') ?? $request->route('donor');
-            if ($id !== null && $request->is('api/donors/*', 'api/donor/*/messages') && is_numeric($id)) {
-                abort_unless($session->donor_id && (int) $id === (int) $session->donor_id, 403);
-            }
-            $requestedSession = $request->route('session_id') ?? $request->input('session_id');
-            if ($requestedSession !== null) {
-                abort_unless((string) $requestedSession === (string) $session->id, 403);
-            }
-            // Existing controller validation keeps session_id fields, but identity comes from the token.
-            if ($request->is('api/donor-sessions/*')) {
-                $request->merge(['session_id' => $session->id]);
-            }
-            if ($request->filled('donor_id')) {
-                abort_unless((int) $request->input('donor_id') === (int) $session->donor_id, 403);
-            }
-            if ($request->has('donor_tier_id')) {
-                abort(403);
-            }
-        }
         $response = $next($request);
-        if ($private || $admin) {
+        if (in_array('role:admin', $request->route()->gatherMiddleware(), true)) {
             $response->headers->set('Cache-Control', 'private, no-store');
         }
 

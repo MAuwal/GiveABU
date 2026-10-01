@@ -66,6 +66,7 @@ class ApiSecurityTest extends TestCase
         Schema::create('donations', function (Blueprint $table) {
             $table->id();
             $table->integer('donor_id');
+            $table->integer('project_id')->nullable();
             $table->decimal('amount', 15, 2);
             $table->string('status');
             $table->timestamps();
@@ -273,5 +274,61 @@ class ApiSecurityTest extends TestCase
         }
         config(['services.google.allowed_client_ids' => '']);
         $this->assertFalse(app(GoogleAuthService::class)->verifyToken('test-id-token'));
+    }
+
+    public function test_sensitive_routes_declare_authentication_explicitly(): void
+    {
+        foreach ([['PUT', '/api/donors/1'], ['POST', '/api/donor-sessions/profile'],
+            ['GET', '/api/donor/1/messages'], ['GET', '/api/messages/received'],
+            ['GET', '/api/donations/history'], ['GET', '/api/donors/search/phone/08012345678'],
+            ['GET', '/api/donors/search/REG123'], ['POST', '/api/devices/register'],
+            ['GET', '/api/devices/check/fingerprint'], ['POST', '/api/session/check'],
+            ['POST', '/api/donor-sessions/me'], ['PUT', '/api/donor-sessions/1/password']] as [$method, $uri]) {
+            $route = app('router')->getRoutes()->match(\Illuminate\Http\Request::create($uri, $method));
+            $this->assertContains('donor.auth', $route->gatherMiddleware(), $uri);
+            $this->json($method, $uri)->assertUnauthorized();
+        }
+        foreach ([['GET', '/api/statistics/summary'], ['POST', '/api/send-sms'],
+            ['GET', '/api/sms-messages'], ['POST', '/api/donor-tiers'],
+            ['PUT', '/api/donor-tiers/1'], ['DELETE', '/api/donor-tiers/1'],
+            ['GET', '/api/admin/statistics'], ['GET', '/api/statistics/donors'], ['POST', '/api/admin/donors/upload']] as [$method, $uri]) {
+            $route = app('router')->getRoutes()->match(\Illuminate\Http\Request::create($uri, $method));
+            $this->assertContains('auth:sanctum', $route->gatherMiddleware(), $uri);
+            $this->assertContains('role:admin', $route->gatherMiddleware(), $uri);
+            $this->assertNotContains('donor.auth', $route->gatherMiddleware(), $uri);
+            $this->json($method, $uri)->assertUnauthorized();
+        }
+    }
+
+    public function test_cors_is_configured_only_by_explicit_environment_origins(): void
+    {
+        $repository = \Illuminate\Support\Env::getRepository();
+        $original = $repository->get('CORS_ALLOWED_ORIGINS');
+        try {
+            $repository->set('CORS_ALLOWED_ORIGINS', ' https://giveabu.com, https://www.giveabu.com,capacitor://localhost, ');
+            $cors = require config_path('cors.php');
+            $this->assertSame(['https://giveabu.com', 'https://www.giveabu.com', 'capacitor://localhost'], $cors['allowed_origins']);
+            $this->assertSame([], $cors['allowed_origins_patterns']);
+            config(['cors.allowed_origins' => $cors['allowed_origins']]);
+            $headers = ['Origin' => 'https://giveabu.com', 'Access-Control-Request-Method' => 'POST'];
+            $this->options('/api/donor-sessions/login', [], $headers)->assertHeader('Access-Control-Allow-Origin', 'https://giveabu.com');
+            foreach (['http://localhost:3000', 'http://127.0.0.1:3000', 'http://192.168.18.2:8000', 'https://untrusted.vercel.app'] as $origin) {
+                $this->options('/api/donor-sessions/login', [], array_replace($headers, ['Origin' => $origin]))->assertHeaderMissing('Access-Control-Allow-Origin');
+            }
+            $repository->set('CORS_ALLOWED_ORIGINS', '');
+            $this->assertSame([], (require config_path('cors.php'))['allowed_origins']);
+        } finally {
+            $original === null ? $repository->clear('CORS_ALLOWED_ORIGINS') : $repository->set('CORS_ALLOWED_ORIGINS', $original);
+        }
+    }
+
+    public function test_donation_history_returns_only_authenticated_donor_records(): void
+    {
+        DB::table('donations')->insert([
+            ['donor_id' => $this->donor->id, 'amount' => 100, 'status' => 'completed'],
+            ['donor_id' => $this->donor->id + 1, 'amount' => 900, 'status' => 'completed'],
+        ]);
+        $this->withHeader('Authorization', 'Bearer '.$this->token)->getJson('/api/donations/history')
+            ->assertOk()->assertJsonCount(1, 'donations')->assertJsonPath('donations.0.donor_id', $this->donor->id);
     }
 }

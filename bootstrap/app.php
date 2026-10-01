@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->alias([
+            'donor.auth' => \App\Http\Middleware\AuthenticateDonor::class,
             'role' => \App\Http\Middleware\RequireRole::class,
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
         ]);
