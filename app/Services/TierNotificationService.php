@@ -90,19 +90,12 @@ class TierNotificationService
             'logo_url'          => $logoUrl,
         ];
 
-        // Decode HTML entities in case the template was saved via the old Trix editor
-        $rawHtml = html_entity_decode($template->body_html ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $rawHtml = str_replace('ABU Endowment Fund Team', 'GiveABU Team', $rawHtml);
-        $rawHtml = preg_replace(
-            '/©\s*\d{4}\s+[^<\r\n]+/u',
-            '© '.now()->year.' ABU. All rights reserved. Powered by @KADICT Hub.',
-            $rawHtml
-        );
-
-        // Replace any logo filename references with the absolute production URL
-        $rawHtml = $this->fixLogoImageUrls($rawHtml, $logoUrl);
-
-        $bodyHtml = $this->replaceVariables($rawHtml, $variables);
+        $bodyHtml = view('emails.thank-you', [
+            'amount' => number_format((float) $donation->amount, 2),
+            'tierName' => $tier->name,
+            'donationDate' => $donation->paid_at ?? $donation->verified_at ?? $donation->created_at,
+            'logoUrl' => $logoUrl,
+        ])->render();
         $subject  = $this->replaceVariables(
             $template->subject ?: "Thank you for your donation — {$tier->name}",
             $variables
@@ -146,24 +139,6 @@ class TierNotificationService
             ]);
         }
         return false;
-    }
-
-    /**
-     * Replace any logo src references (relative or absolute) with the production URL.
-     */
-    private function fixLogoImageUrls(string $html, string $logoUrl): string
-    {
-        $filenames = ['abu_logo_white_for_email.png', 'abu_logo.png'];
-
-        foreach ($filenames as $filename) {
-            $html = preg_replace(
-                '/src=["\'][^"\']*' . preg_quote($filename, '/') . '["\']/i',
-                'src="' . $logoUrl . '"',
-                $html
-            );
-        }
-
-        return $html;
     }
 
     /**

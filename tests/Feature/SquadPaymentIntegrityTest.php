@@ -607,7 +607,7 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => 'donor@example.test', 'phone' => 'invalid'])->assertStatus(422);
     }
 
-    public function test_tier_email_replaces_legacy_date_with_recorded_payment_date(): void
+    public function test_tier_email_uses_requested_copy_with_recorded_payment_date(): void
     {
         foreach (['2025_12_24_164200_create_email_templates_table.php', '2025_12_24_164200_create_email_logs_table.php',
             '2026_05_13_165522_create_donor_tiers_table.php', '2026_05_13_171803_add_donor_tier_id_to_email_templates_table.php'] as $migration) {
@@ -619,11 +619,47 @@ class SquadPaymentIntegrityTest extends TestCase
             'body_html' => 'Date: {{created_at}} / {{ created_at }} / [created_at] / {{donation_date}} — ABU Endowment Fund Team<p>© 2026 Ahmadu Bello University Zaria Development Fund</p>']);
         $this->donation->forceFill(['status' => 'completed', 'created_at' => '2026-09-20 09:00:00',
             'paid_at' => '2026-09-22 10:00:00', 'verified_at' => '2026-09-23 10:00:00'])->save();
-        Mail::shouldReceive('html')->once()->with('Date: 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 — GiveABU Team<p>© '.now()->year.' ABU. All rights reserved. Powered by @KADICT Hub.</p>', \Mockery::type('callable'));
+        $matchesReceipt = function (string $date) {
+            return \Mockery::on(function (string $html) use ($date) {
+                $this->assertStringContainsString('On behalf of Ahmadu Bello University, we extend our sincere appreciation for your generous contribution.', $html);
+                $this->assertStringContainsString('Donor Tier:</strong> General Supporter', $html);
+                $this->assertStringContainsString('Date:</strong> '.$date, $html);
+                $this->assertStringContainsString('Sincerely,<br>Ahmadu Bello University, Zaria', $html);
+                $this->assertStringContainsString('Powered by @KADICT Hub', $html);
+                $this->assertStringNotContainsString('{{created_at}}', $html);
+                $this->assertStringNotContainsString('ABU Endowment Fund Team', $html);
+
+                return true;
+            });
+        };
+        Mail::shouldReceive('html')->once()->with($matchesReceipt('22 Sep 2026'), \Mockery::type('callable'));
         $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
         $this->assertSame('sent', \App\Models\EmailLog::firstOrFail()->status);
         $this->donation->forceFill(['paid_at' => null, 'verified_at' => null])->save();
-        Mail::shouldReceive('html')->once()->with('Date: 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 — GiveABU Team<p>© '.now()->year.' ABU. All rights reserved. Powered by @KADICT Hub.</p>', \Mockery::type('callable'));
+        Mail::shouldReceive('html')->once()->with($matchesReceipt('20 Sep 2026'), \Mockery::type('callable'));
         $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
+    }
+
+    public function test_payment_email_matches_requested_wording_and_formats_dynamic_details(): void
+    {
+        $html = view('emails.thank-you', ['amount' => '1,000.00',
+            'donationDate' => \Illuminate\Support\Carbon::parse('2026-10-01')])->render();
+        foreach ([
+            'On behalf of Ahmadu Bello University, we extend our sincere appreciation for your generous contribution.',
+            'Your donation of ₦1,000.00 demonstrates your commitment to supporting education, research, and the future development of our institution.',
+            'Donor Tier:</strong> General Supporter', 'Amount:</strong> ₦1,000.00', 'Date:</strong> 01 Oct 2026',
+            'Provide scholarships for deserving students', 'Support innovative research initiatives',
+            'Improve learning facilities and infrastructure', 'Advance community development efforts',
+            'Every contribution strengthens the future of ABU and creates opportunities for generations to come.',
+            'Thank you for being part of the ABU legacy.', 'Sincerely,<br>Ahmadu Bello University, Zaria',
+            'Powered by @KADICT Hub',
+        ] as $text) {
+            $this->assertStringContainsString($text, $html);
+        }
+        $html = view('emails.thank-you', ['amount' => '123,456.00', 'tierName' => 'Gold Benefactor',
+            'donationDate' => \Illuminate\Support\Carbon::parse('2026-09-22')])->render();
+        $this->assertStringContainsString('Your donation of ₦123,456.00', $html);
+        $this->assertStringContainsString('Donor Tier:</strong> Gold Benefactor', $html);
+        $this->assertStringContainsString('Date:</strong> 22 Sep 2026', $html);
     }
 }

@@ -30,9 +30,10 @@ class PaymentNotificationService
         Mail::send('emails.thank-you', [
             'donorName' => trim("{$donor->surname} {$donor->name}") ?: 'Valued Donor',
             'amount' => number_format((float) $donation->amount, 2),
+            'tierName' => $donor->donor_tier_id ? ($donor->tier?->name ?? 'General Supporter') : 'General Supporter',
             'reference' => $donation->payment_reference,
             'projectName' => $donation->project?->project_title ?? 'GIVE ABU',
-            'donationDate' => $donation->paid_at,
+            'donationDate' => $donation->paid_at ?? $donation->verified_at ?? $donation->created_at,
             'donationType' => $donation->endowment === 'yes' ? 'GIVE ABU Fund' : 'Project Donation',
             'logoUrl' => 'https://abu-endowment.cloud/abu_logo_white_for_email.png',
         ], function ($message) use ($donor) {

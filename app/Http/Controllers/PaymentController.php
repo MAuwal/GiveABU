@@ -671,9 +671,10 @@ class PaymentController extends Controller
             Mail::send('emails.thank-you', [
                 'donorName'    => $donorName,
                 'amount'       => $amount,
+                'tierName'     => $donor->donor_tier_id ? ($donor->tier?->name ?? 'General Supporter') : 'General Supporter',
                 'reference'    => $reference,
                 'projectName'  => $projectName,
-                'donationDate' => $donation->paid_at ?? now(),
+                'donationDate' => $donation->paid_at ?? $donation->verified_at ?? $donation->created_at,
                 'donationType' => $donation->endowment === 'yes' ? 'GIVE ABU Fund' : 'Project Donation',
                 'logoUrl'      => 'https://abu-endowment.cloud/abu_logo_white_for_email.png',
             ], function($message) use ($donor) {
