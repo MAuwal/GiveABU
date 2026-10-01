@@ -26,9 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
         ]);
 
-        $middleware->trustProxies(
-            at: array_values(array_filter(array_map('trim', explode(',', config('app.trusted_proxies', ''))))),
-            headers: \Illuminate\Http\Request::HEADER_X_FORWARDED_FOR | \Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO | \Illuminate\Http\Request::HEADER_X_FORWARDED_PORT
+        $middleware->replace(
+            \Illuminate\Http\Middleware\TrustProxies::class,
+            \App\Http\Middleware\TrustConfiguredProxies::class
         );
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -51,7 +51,7 @@ class ReadinessTest extends TestCase
 
     public function test_forwarded_headers_are_accepted_only_from_configured_proxy(): void
     {
-        \Illuminate\Http\Middleware\TrustProxies::at(['10.10.0.10']);
+        config(['app.trusted_proxies' => '10.10.0.10']);
         \Illuminate\Support\Facades\Route::get('/proxy-test', fn (\Illuminate\Http\Request $request) => response()->json(['secure' => $request->isSecure(), 'ip' => $request->ip()]));
         try {
             $this->withServerVariables(['REMOTE_ADDR' => '10.10.0.10'])->withHeaders(['X-Forwarded-Proto' => 'https', 'X-Forwarded-For' => '203.0.113.5'])
@@ -59,8 +59,17 @@ class ReadinessTest extends TestCase
             $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.9', 'HTTPS' => 'off', 'SERVER_PORT' => '80'])->get('http://localhost/proxy-test')
                 ->assertExactJson(['secure' => false, 'ip' => '203.0.113.9']);
         } finally {
-            \Illuminate\Http\Middleware\TrustProxies::at([]);
+            config(['app.trusted_proxies' => '']);
         }
+    }
+
+    public function test_http_kernel_constructs_before_config_is_loaded(): void
+    {
+        $code = 'require '.var_export(base_path('vendor/autoload.php'), true).'; $app = require '.var_export(base_path('bootstrap/app.php'), true).'; $app->make(\\Illuminate\\Contracts\\Http\\Kernel::class); echo "boot-ready";';
+        $process = new \Symfony\Component\Process\Process([PHP_BINARY, '-r', $code]);
+        $process->run();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+        $this->assertSame('boot-ready', $process->getOutput());
     }
 
     public function test_drained_node_is_not_ready_but_still_alive(): void
