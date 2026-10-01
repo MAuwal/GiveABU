@@ -584,12 +584,14 @@ class SquadPaymentIntegrityTest extends TestCase
     public function test_receipt_uses_submitted_phone_and_exact_requested_sms_format(): void
     {
         $this->donation->donor->update(['phone' => '08011111111']);
-        $this->donation->update(['receipt_phone' => '08012345678']);
+        $this->reference = 'ABU_ZARIA_SQUAD_2026_e29b41d4';
+        $this->donation->update(['receipt_phone' => '08012345678', 'amount' => '123456.00', 'payment_reference' => $this->reference]);
+        $this->donation->transactions()->update(['payment_reference' => $this->reference]);
         config(['services.kudi.token' => 'test-key', 'services.kudi.url' => 'https://kudi.test/api/intcomposesms']);
-        $this->gateway();
+        $this->gateway(['transaction_amount' => 12345600]);
         Http::fake(['https://kudi.test/*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
         $this->getJson('/api/squad/verify/'.$this->reference)->assertOk();
-        $expected = "Thank you for your generous donation to ABU Zaria. Your payment of **₦123.45** has been received successfully.\n**Payment Reference:** ".$this->reference;
+        $expected = "Thank you for your generous donation to ABU Zaria. Your payment of ₦123,456.00 has been received successfully.\n\nPayment Reference: ".$this->reference;
         Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/') && $r['recipients'] === '2348012345678' && $r['message'] === $expected);
         $this->assertSame('08011111111', $this->donation->donor->fresh()->phone);
         $this->assertArrayNotHasKey('receipt_phone', $this->donation->fresh()->toArray());

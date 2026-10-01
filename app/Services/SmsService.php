@@ -58,7 +58,9 @@ class SmsService
      */
     public function sendDonationConfirmationSms($phoneNumber, $name, $amount, $project, $reference = '')
     {
-        $message = "Thank you for your generous donation to ABU Zaria. Your payment of **₦{$amount}** has been received successfully.\n**Payment Reference:** {$reference}";
+        $minor = PaymentAmount::kobo($amount);
+        $formattedAmount = number_format(intdiv($minor, 100), 0, '.', ',').'.'.str_pad((string) ($minor % 100), 2, '0', STR_PAD_LEFT);
+        $message = "Thank you for your generous donation to ABU Zaria. Your payment of ₦{$formattedAmount} has been received successfully.\n\nPayment Reference: {$reference}";
 
         return $this->sendSms($phoneNumber, $message, [
             'tag' => 'donation',
