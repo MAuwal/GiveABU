@@ -65,6 +65,7 @@ class SquadPaymentIntegrityTest extends TestCase
             '2026_05_08_175917_add_category_to_payment_transactions_table.php',
             '2026_10_01_000001_harden_donation_payment_schema.php',
             '2026_10_01_000003_add_receipt_phone_to_donations.php',
+            '2026_10_01_000005_create_payment_notification_outbox.php',
         ] as $migration) {
             (require database_path('migrations/'.$migration))->up();
         }
@@ -712,5 +713,144 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertTrue(Schema::hasIndex('donations', 'donations_recovery_scan'));
         $migration->down();
         $this->assertFalse(Schema::hasIndex('donations', 'donations_recovery_scan'));
+    }
+
+    public function test_receipt_job_dispatch_waits_for_outer_commit_and_rollback_discards_it(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway();
+        DB::beginTransaction();
+        $this->verify();
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        $this->assertSame(1, DB::table('payment_notification_outbox')->count());
+        DB::rollBack();
+        $this->assertSame('pending', $this->donation->fresh()->status);
+        $this->assertSame(0, DB::table('payment_notification_outbox')->count());
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        DB::beginTransaction();
+        $this->verify();
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        DB::commit();
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        Mail::assertNothingSent();
+    }
+
+    public function test_callback_and_duplicate_webhooks_create_one_receipt_job_and_no_inline_delivery(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway();
+        $this->verify();
+        $this->webhook()->assertOk();
+        $this->webhook()->assertOk();
+        $this->verify();
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        $this->assertSame(1, DB::table('payment_notification_outbox')->count());
+        Mail::assertNothingSent();
+        $this->assertSame('completed', $this->donation->fresh()->status);
+    }
+
+    public function test_rejected_payment_does_not_queue_receipts(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway(['transaction_amount' => 1]);
+        $this->verify();
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        $this->assertSame(0, DB::table('payment_notification_outbox')->count());
+    }
+
+    public function test_receipt_job_replay_sends_each_external_effect_once(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->donation->donor->update(['phone' => '08064247753']);
+        $sms = $this->mock(\App\Services\SmsService::class);
+        $sms->shouldReceive('sendDonationConfirmationSms')->once()->andReturn(['success' => true]);
+        Mail::swap(\Mockery::mock(\Illuminate\Contracts\Mail\Mailer::class));
+        Mail::shouldReceive('send')->once();
+        $this->gateway();
+        $this->verify();
+        $job = new \App\Jobs\DeliverPaymentNotification(DB::table('payment_notification_outbox')->value('id'));
+        $job->handle();
+        $job->handle();
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'sms.accepted')->count());
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'notification.sent')->count());
+        $this->assertSame('delivered', DB::table('payment_notification_outbox')->value('status'));
+        $this->assertSame('completed', $this->donation->fresh()->status);
+    }
+
+    public function test_failed_receipt_job_is_observable_and_retries_do_not_resend(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->donation->donor->update(['phone' => '08064247753']);
+        $this->mock(\App\Services\SmsService::class)->shouldReceive('sendDonationConfirmationSms')->once()->andReturn(['success' => false]);
+        $this->gateway();
+        $this->verify();
+        $job = new \App\Jobs\DeliverPaymentNotification(DB::table('payment_notification_outbox')->value('id'));
+        for ($i = 0; $i < 2; $i++) {
+            try {
+                $job->handle();
+                $this->fail('Failed delivery must be observable.');
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('Notification', $e->getMessage());
+            }
+        }
+        $this->assertSame('failed', DB::table('payment_notification_outbox')->value('status'));
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'sms.failed')->count());
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'notification.sent')->count());
+        $this->assertSame('completed', $this->donation->fresh()->status);
+    }
+
+    public function test_queue_publish_failure_preserves_success_and_durable_outbox(): void
+    {
+        \Illuminate\Support\Facades\Bus::shouldReceive('dispatch')->andThrow(new \RuntimeException('queue unavailable'));
+        $this->gateway();
+        $this->assertTrue($this->verify()['success']);
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        $this->assertSame('pending', DB::table('payment_notification_outbox')->value('status'));
+        $this->assertNull(DB::table('payment_notification_outbox')->value('published_at'));
+        Mail::assertNothingSent();
+    }
+
+    public function test_stale_pending_notification_outbox_can_be_republished_without_inline_delivery(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway();
+        $this->verify();
+        DB::table('payment_notification_outbox')->update(['published_at' => now()->subMinutes(20)]);
+        $this->artisan('payments:dispatch-notifications --limit=1')->assertSuccessful();
+        $this->assertSame(1, DB::table('payment_notification_outbox')->count());
+        Mail::assertNothingSent();
+        $this->artisan('payments:dispatch-notifications --limit=0')->assertFailed();
+    }
+
+    public function test_interswitch_committed_completion_queues_receipt_without_inline_delivery(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        PaymentTransaction::where('donation_id', $this->donation->id)->update(['payment_gateway' => 'interswitch']);
+        config(['services.interswitch.merchant_code' => 'test-merchant']);
+        Http::fake(['*' => Http::response(['ResponseCode' => '00', 'Amount' => 12345], 200)]);
+        $controller = app(\App\Http\Controllers\InterswitchPaymentController::class);
+        $response = $controller->verifyApi($this->reference);
+        $this->assertTrue($response->getData(true)['success']);
+        $controller->verifyApi($this->reference);
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        Mail::assertNothingSent();
+        $this->assertSame('completed', $this->donation->fresh()->status);
+    }
+
+    public function test_paystack_receipts_wait_for_outer_commit_and_duplicate_success_cannot_duplicate_jobs(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $controller = app(\App\Http\Controllers\PaymentController::class);
+        $method = new \ReflectionMethod($controller, 'handleSuccessfulPayment');
+        $data = ['reference' => $this->reference, 'amount' => 12345, 'status' => 'success'];
+        DB::beginTransaction();
+        $method->invoke($controller, $data);
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        DB::commit();
+        $method->invoke($controller, $data);
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        $this->assertSame(1, DB::table('payment_notification_outbox')->count());
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        Mail::assertNothingSent();
     }
 }

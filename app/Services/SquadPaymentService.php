@@ -83,18 +83,7 @@ class SquadPaymentService
                     // Serialize project totals and keep model closing behavior. Rebuild from current reads.
                     app(ProjectFundingService::class)->rebuild($project->id);
                 }
-                DB::afterCommit(function () use ($locked) {
-                    try {
-                        app(PaymentNotificationService::class)->send($locked->fresh());
-                    } catch (\Throwable $e) {
-                        try {
-                            $this->event($locked, 'notification.failed');
-                        } catch (\Throwable $auditError) {
-                            // A post-commit audit outage must not misreport a recorded payment.
-                        }
-                        Log::error('Payment notification failed after commit', ['donation_id' => $locked->id, 'exception' => get_class($e)]);
-                    }
-                });
+                app(PaymentNotificationOutbox::class)->enqueue($locked, 'squad');
 
                 return $this->result($locked, 'completed');
             }
