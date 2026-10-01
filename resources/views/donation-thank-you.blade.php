@@ -230,8 +230,8 @@
                             <line x1="36" y1="16" x2="16" y2="36" stroke="white" stroke-width="5" stroke-linecap="round"/>
                         </svg>
                     </div>
-                    <h1>Payment Incomplete</h1>
-                    <p>We could not confirm your payment</p>
+                    <h1>{{ !empty($statusUrl) ? 'Checking your payment' : 'Payment Incomplete' }}</h1>
+                    <p>{{ !empty($statusUrl) ? 'Waiting for confirmation from the payment gateway' : 'We could not confirm your payment' }}</p>
                 @endif
 
                 <div class="wave">
@@ -300,7 +300,7 @@
                         </div>
                         <div class="detail-row">
                             <span class="dk">Status</span>
-                            <span class="dv" style="color:#dc2626;">✗ Not Completed</span>
+                            <span class="dv" style="color:#dc2626;">{{ !empty($statusUrl) ? 'Confirmation pending' : 'Not completed' }}</span>
                         </div>
                     </div>
                     <p style="text-align:center;color:#6b7280;font-size:0.88rem;margin-bottom:1.5rem;">
@@ -319,5 +319,25 @@
     </div>
 
     <footer>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</footer>
+@if(!empty($statusUrl))
+<script>
+(() => {
+    const statusUrl = @json($statusUrl);
+    let attempts = 0;
+    async function checkPayment() {
+        if (++attempts > 18) return;
+        try {
+            const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}, cache: 'no-store'});
+            if (response.ok) {
+                const data = await response.json();
+                if (data.status === 'completed' || data.status === 'failed') { window.location.reload(); return; }
+            }
+        } catch (error) { /* A temporary network outage leaves payment recoverable. */ }
+        setTimeout(checkPayment, 10000);
+    }
+    setTimeout(checkPayment, 1000);
+})();
+</script>
+@endif
 </body>
 </html>

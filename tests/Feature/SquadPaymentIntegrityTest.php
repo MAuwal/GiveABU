@@ -853,4 +853,20 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertSame('completed', $this->donation->fresh()->status);
         Mail::assertNothingSent();
     }
+
+    public function test_signed_status_poll_recovers_provider_outage_and_enqueues_one_receipt(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        Http::fake(['*' => Http::response([], 503)]);
+        $this->get('/donation/thank-you?transaction_ref='.$this->reference)->assertOk()->assertSee('Checking your payment')->assertViewHas('statusUrl');
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute('donation.status', now()->addMinutes(15), ['donation' => $this->donation->id]);
+        $this->get($url)->assertOk()->assertExactJson(['status' => 'pending']);
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        $this->gateway();
+        $this->get($url)->assertOk()->assertExactJson(['status' => 'completed']);
+        $this->get($url)->assertOk()->assertExactJson(['status' => 'completed']);
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        $this->get('/donation/status/'.$this->donation->id)->assertForbidden();
+        Mail::assertNothingSent();
+    }
 }
