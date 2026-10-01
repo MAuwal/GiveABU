@@ -344,6 +344,17 @@ class ApiSecurityTest extends TestCase
             ->get('/forgot-password')->assertOk()->assertSee('Check your email')->assertSee('Check your inbox and spam folder.');
     }
 
+    public function test_donor_login_modal_redirects_to_dashboard_for_password_and_google_token(): void
+    {
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->set('username', $this->donor->email)->set('password', 'strong-test-password')
+            ->call('login')->assertRedirect(route('donor.dashboard'));
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->call('saveAuthToken', $this->token)->assertRedirect(route('donor.dashboard'));
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->call('saveAuthToken', 'invalid-token')->assertNoRedirect();
+    }
+
     private function dashboardSchema(): void
     {
         Schema::create('projects', function (Blueprint $table) {
