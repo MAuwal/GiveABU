@@ -304,7 +304,7 @@
                         </div>
                     </div>
                     <p style="text-align:center;color:#6b7280;font-size:0.88rem;margin-bottom:1.5rem;">
-                        Your payment was not completed or could not be verified. No charge has been made. Please try again.
+                        Payment confirmation is {{ $paymentState ?? 'pending' }}. If you have been charged, keep your reference and contact support. Please wait for confirmation before paying again.
                     </p>
                 @endif
 

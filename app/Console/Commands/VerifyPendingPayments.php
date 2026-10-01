@@ -52,12 +52,11 @@ class VerifyPendingPayments extends Command
 
     private function processPending()
     {
-        // Get donations that are pending, created within last 24 hours
+        // Preserve recovery for older pending donations as well.
         // We wait at least 5 seconds to avoid querying a transaction that was literally just inserted
         $donations = Donation::with(['donor', 'project', 'transactions'])
             ->where('status', 'pending')
             ->where('created_at', '<', now()->subSeconds(5))
-            ->where('created_at', '>=', now()->subHours(24))
             ->get();
 
         foreach ($donations as $donation) {
@@ -98,32 +97,7 @@ class VerifyPendingPayments extends Command
 
     private function verifySquad(Donation $donation, $reference)
     {
-        $secretKey = config('services.squad.secret_key');
-        $baseUrl = rtrim(config('services.squad.base_url', 'https://api-d.squadco.com'), '/');
-
-        if (empty($secretKey)) return;
-
-        $response = Http::withToken($secretKey)
-            ->acceptJson()
-            ->timeout(15)
-            ->get("{$baseUrl}/transaction/verify/{$reference}");
-
-        if ($response->failed()) return;
-
-        $data = $response->json();
-        $txData = data_get($data, 'data', []);
-        
-        $status = strtolower(data_get($txData, 'transaction_status', data_get($txData, 'status', '')));
-        $isSuccess = in_array($status, ['success', 'complete', 'successful', 'approved']);
-
-        if ($isSuccess) {
-            $amountKobo = (int) data_get($txData, 'transaction_amount', data_get($txData, 'amount', 0));
-            $amountNaira = $amountKobo > 0 ? $amountKobo / 100 : $donation->amount;
-            
-            $this->markAsCompleted($donation, 'squad', $reference, $amountNaira, $status, $data);
-        } elseif (in_array($status, ['failed'])) {
-            $this->markAsFailed($donation, 'squad', $reference, $status, $data);
-        }
+        app(\App\Services\SquadPaymentService::class)->verify((string) $reference);
     }
 
     private function verifyInterswitch(Donation $donation, $reference, $amountNaira)
@@ -263,13 +237,15 @@ class VerifyPendingPayments extends Command
 
     private function updateProjectRaised($projectId)
     {
-        $project = \App\Models\Project::find($projectId);
-        if ($project) {
-            $raised = Donation::where('project_id', $projectId)
-                ->where('status', 'completed')
-                ->sum('amount');
-            
-            $project->update(['raised' => $raised]);
+        if (!$projectId) {
+            return false;
+        }
+        try {
+            app(\App\Services\ProjectFundingService::class)->rebuild((int) $projectId);
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('Project total reconciliation failed', ['project_id' => $projectId, 'exception' => get_class($e)]);
+            return false;
         }
     }
 

@@ -15,12 +15,21 @@ class Donation extends Model
         'endowment',
         'status',
         'payment_reference',
+        'paid_at',
+        'verified_at',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'paid_at' => 'datetime',
+        'verified_at' => 'datetime',
         'endowment' => 'string', // 'yes' or 'no'
     ];
+
+    public function transactions()
+    {
+        return $this->hasMany(PaymentTransaction::class);
+    }
 
     public function donor()
     {

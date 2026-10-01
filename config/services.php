@@ -44,19 +44,21 @@ return [
 
     // Ozeki SMS Gateway Configuration
     'ozeki' => [
-        'username' => env('OZEKI_USERNAME', 'http_user'),
-        'password' => env('OZEKI_PASSWORD', 'qwe123'),
+        'username' => env('OZEKI_USERNAME'),
+        'password' => env('OZEKI_PASSWORD'),
         'api_url' => env('OZEKI_API_URL', 'http://127.0.0.1:9509/api?action=rest'),
         'enabled' => env('SMS_VERIFICATION_ENABLED', true),
     ],
 
     'kudi' => [
-        'token' => env('KUDI_SMS_KEY', 'iC4HrtdX0zlSMRJmIkNu9ZfL61pYVFTvQgs7GhOEjnAWPe3UDbxwycB2q8oaK5'),
+        'token' => env('KUDI_SMS_KEY'),
         'url' => env('KUDI_SMS_URL', 'https://my.kudisms.net/api/intcomposesms'),
     ],
 
     // Squad Payment Configuration
     'squad' => [
+        // Exact callback URL bases, including approved mobile deep links.
+        'callback_urls' => array_filter(array_map('trim', explode(',', env('SQUAD_CALLBACK_URLS', '')))),
         'secret_key' => env('SQUAD_SECRET_KEY', ''),
         'base_url'   => env('SQUAD_API_URL', env('SQUAD_BASE_URL', 'https://api-d.squadco.com')),
     ],

@@ -4,681 +4,170 @@ namespace App\Http\Controllers;
 
 use App\Models\Donation;
 use App\Models\Donor;
-use App\Models\PaymentTransaction;
-use App\Services\TierNotificationService;
+use App\Services\PaymentAmount;
+use App\Services\SquadPaymentService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class SquadPaymentController extends Controller
 {
-    private string $secretKey;
-    private string $baseUrl;
+    public function __construct(private SquadPaymentService $payments) {}
 
-    public function __construct()
-    {
-        $this->secretKey = config('services.squad.secret_key');
-        $this->baseUrl   = rtrim(config('services.squad.base_url', 'https://api-d.squadco.com'), '/');
-    }
-
-    /**
-     * Initiate a Squad payment and return a checkout URL.
-     * POST /api/squad/pay
-     */
     public function initiate(Request $request)
     {
         $request->validate([
-            'amount'        => 'required|numeric|min:100',
-            'email'         => 'required|email',
+            'amount' => ['required', 'numeric', 'min:100', 'regex:/\A\d{1,13}(?:\.\d{1,2})?\z/'],
+            'email' => 'required|email|max:255',
             'customer_name' => 'nullable|string|max:255',
-            'name'          => 'nullable|string|max:255',
-            'callback_url'  => 'nullable|string',
-            'project_id'    => 'nullable|integer|exists:projects,id',
-            'donor_id'      => 'nullable|integer',
-            'project_title' => 'nullable|string',
+            'name' => 'nullable|string|max:255',
+            'callback_url' => 'nullable|string|max:2048',
+            'project_id' => 'nullable|integer|exists:projects,id',
+            'donor_id' => 'nullable|integer|exists:donors,id',
+            'project_title' => 'nullable|string|max:255',
         ]);
-
-        if (empty($this->secretKey)) {
-            Log::error('Squad payment initiation failed: SQUAD_SECRET_KEY not configured');
-            return response()->json([
-                'message' => 'Payment provider configuration is incomplete. Please contact support.',
-            ], 500);
+        $callback = $request->input('callback_url');
+        if ($callback && ! $this->allowedCallback($callback)) {
+            throw ValidationException::withMessages(['callback_url' => 'Callback URL is not approved.']);
         }
-
-        $amountNaira  = (float) $request->input('amount');
-        $amountKobo   = (int) round($amountNaira * 100);
-        $email        = $request->input('email');
-        $customerName = trim($request->input('customer_name', $request->input('name', '')));
-        $projectId    = $request->input('project_id');
-        $donorId      = $request->input('donor_id');
-
-        // Find or create donor by email
-        $donor = Donor::firstOrCreate(
-            ['email' => $email],
-            [
-                'name'       => $customerName ?: 'Anonymous',
-                'surname'    => '',
-                'donor_type' => 'addressable_alumni',
-            ]
-        );
-
-        // Create donation record before calling Squad
-        $donation = Donation::create([
-            'donor_id'          => $donorId ?: $donor->id,
-            'project_id'        => $projectId,
-            'amount'            => $amountNaira,
-            'type'              => $projectId ? 'project' : 'endowment',
-            'frequency'         => 'onetime',
-            'endowment'         => $projectId ? 'no' : 'yes',
-            'status'            => 'pending',
-            'payment_reference' => 'ABU_ZARIA_SQUAD_' . time() . '_' . uniqid(),
+        $secret = (string) config('services.squad.secret_key');
+        if ($secret === '') {
+            return response()->json(['message' => 'Payment provider is unavailable. Please contact support.'], 503);
+        }
+        $amountKobo = PaymentAmount::kobo($request->input('amount'));
+        $amount = PaymentAmount::naira($amountKobo);
+        $name = trim($request->input('customer_name') ?: $request->input('name', ''));
+        $donor = $request->filled('donor_id') ? Donor::findOrFail($request->input('donor_id')) : null;
+        if ($donor && strcasecmp((string) $donor->email, $request->input('email')) !== 0) {
+            throw ValidationException::withMessages(['donor_id' => 'Donor does not match the supplied email.']);
+        }
+        $donor ??= Donor::firstOrCreate(['email' => $request->input('email')], [
+            'name' => $name ?: 'Anonymous', 'surname' => '', 'donor_type' => 'addressable_alumni',
         ]);
+        $donation = DB::transaction(function () use ($request, $donor, $amount) {
+            $donation = Donation::create([
+                'donor_id' => $donor->id, 'project_id' => $request->input('project_id'), 'amount' => $amount,
+                'type' => $request->filled('project_id') ? 'project' : 'endowment', 'frequency' => 'onetime',
+                'endowment' => $request->filled('project_id') ? 'no' : 'yes', 'status' => 'pending',
+                'payment_reference' => 'ABU_ZARIA_SQUAD_'.Str::uuid(),
+            ]);
+            $this->payments->event($donation, 'payment.initialized', [], 'initialized');
 
-        // Track initialization event
-        $initTransaction = PaymentTransaction::updateOrCreate(
-            [
-                'payment_gateway'   => 'squad',
-                'payment_reference' => $donation->payment_reference,
-            ],
-            [
-                'donation_id'       => $donation->id,
-                'donor_id'          => $donorId ?: $donor->id,
-                'project_id'        => $projectId,
-                'category'          => $projectId ? 'project' : 'general',
-                'event_type'        => 'payment.initialized',
-                'gateway_reference' => null,
-                'amount'            => $amountNaira,
-                'currency'          => 'NGN',
-                'status'            => 'pending',
-                'gateway_status'    => 'initialized',
-                'channel'           => null,
-                'fee'               => 0,
-            ]
-        );
-
-        // Use custom callback if provided (e.g. Capacitor deep link)
-        $callbackUrl = $request->input('callback_url') 
-            ?: url('/donation/thank-you') . '?transaction_ref=' . $donation->payment_reference;
-
-        $payload = [
-            'amount'          => $amountKobo,
-            'email'           => $email,
-            'currency'        => 'NGN',
-            'initiate_type'   => 'inline',
-            'transaction_ref' => $donation->payment_reference,
-            'callback_url'    => $callbackUrl,
-            'metadata'        => [
-                'amount_naira'  => $amountNaira,
-                'customer_name' => $customerName,
-                'donor_id'      => $donor->id,
-                'donation_id'   => $donation->id,
-                'project_id'    => $projectId,
-            ],
-        ];
-
-        if ($customerName) {
-            $payload['customer_name'] = $customerName;
-        }
-
+            return $donation;
+        });
+        $callback ??= url('/donation/thank-you').'?transaction_ref='.$donation->payment_reference;
         try {
-            $response = Http::withToken($this->secretKey)
-                ->acceptJson()
-                ->timeout(30)
-                ->post("{$this->baseUrl}/transaction/initiate", $payload);
+            $response = Http::withToken($secret)->acceptJson()->connectTimeout(5)->timeout(30)
+                ->post(rtrim(config('services.squad.base_url'), '/').'/transaction/initiate', [
+                    'amount' => $amountKobo, 'email' => $donor->email, 'currency' => 'NGN',
+                    'initiate_type' => 'inline', 'transaction_ref' => $donation->payment_reference,
+                    'callback_url' => $callback, 'customer_name' => $name ?: $donor->name,
+                    'metadata' => ['donation_id' => $donation->id, 'donor_id' => $donor->id, 'project_id' => $donation->project_id],
+                ]);
+            $checkout = $response->json('data.checkout_url');
+            if (! $response->successful() || $response->json('success') !== true || ! is_string($checkout)
+                || ! filter_var($checkout, FILTER_VALIDATE_URL) || parse_url($checkout, PHP_URL_SCHEME) !== 'https') {
+                $this->payments->event($donation, 'initialization.unavailable', [], 'provider_response');
 
-            if ($response->failed()) {
-                $donation->update(['status' => 'failed']);
-                $initTransaction->update([
-                    'status'           => 'failed',
-                    'gateway_status'   => 'failed',
-                    'response_payload' => json_encode($response->json()),
-                ]);
-                Log::error('Squad payment initiation failed', [
-                    'status'  => $response->status(),
-                    'body'    => $response->body(),
-                    'payload' => $payload,
-                ]);
-                return response()->json([
-                    'message' => 'Unable to initiate payment. Please try again later.',
-                    'details' => $response->json(),
-                ], 500);
+                return response()->json(['message' => 'Unable to initiate payment. Please try again later.',
+                    'transaction_ref' => $donation->payment_reference], 503);
             }
+            $this->payments->event($donation, 'initialization.accepted');
 
-            $data        = $response->json();
-            $checkoutUrl = data_get($data, 'data.checkout_url');
+            return response()->json(['checkout_url' => $checkout, 'transaction_ref' => $donation->payment_reference]);
+        } catch (\Throwable $e) {
+            $this->payments->event($donation, 'initialization.unavailable', [], 'connection');
+            Log::warning('Squad initialization unavailable', ['donation_id' => $donation->id, 'exception' => get_class($e)]);
 
-            if (!$checkoutUrl) {
-                $donation->update(['status' => 'failed']);
-                $initTransaction->update([
-                    'status'           => 'failed',
-                    'gateway_status'   => 'failed',
-                    'response_payload' => json_encode($data),
-                ]);
-                Log::error('Squad payment initiation missing checkout URL', ['response' => $data]);
-                return response()->json([
-                    'message' => 'Payment provider did not return a checkout URL.',
-                    'details' => $data,
-                ], 500);
-            }
-
-            // Update init transaction with Squad's gateway reference
-            $initTransaction->update([
-                'gateway_reference' => data_get($data, 'data.transaction_ref'),
-                'response_payload'  => json_encode($data),
-            ]);
-
-            return response()->json([
-                'checkout_url'    => $checkoutUrl,
-                'transaction_ref' => $donation->payment_reference,
-            ]);
-
-        } catch (\Exception $e) {
-            $donation->update(['status' => 'failed']);
-            Log::error('Squad payment initiation exception', ['error' => $e->getMessage()]);
-            return response()->json([
-                'message' => 'Unexpected error while initiating payment.',
-                'error'   => $e->getMessage(),
-            ], 500);
+            return response()->json(['message' => 'Unable to initiate payment. Please try again later.',
+                'transaction_ref' => $donation->payment_reference], 503);
         }
     }
 
-    /**
-     * Confirm a Squad payment after Squad redirects the user back.
-     * GET /donation/thank-you?transaction_ref=...
-     */
-    public function confirm(Request $request)
+    private function allowedCallback(string $callback): bool
     {
-        $ref = $request->query('transaction_ref');
-
-        if (!$ref) {
-            return view('donation-thank-you', [
-                'success'   => false,
-                'donorName' => 'Guest',
-                'amount'    => 0,
-                'email'     => '',
-                'tierName'  => null,
-                'ref'       => null,
-                'emailSent' => false,
-            ]);
-        }
-
-        try {
-            // Verify with Squad
-            $response = Http::withToken($this->secretKey)
-                ->acceptJson()
-                ->timeout(30)
-                ->get("{$this->baseUrl}/transaction/verify/{$ref}");
-
-            if ($response->failed()) {
-                Log::error('Squad verify failed', ['ref' => $ref, 'status' => $response->status()]);
-                return $this->failedView($ref);
-            }
-
-            $data   = $response->json();
-            $txData = data_get($data, 'data', []);
-
-            // Squad status field varies; check multiple keys
-            $status      = strtolower(data_get($txData, 'transaction_status', data_get($txData, 'status', '')));
-            $isSuccess   = in_array($status, ['success', 'complete', 'successful', 'approved']);
-
-            if (!$isSuccess) {
-                Log::info('Squad payment not successful', ['ref' => $ref, 'status' => $status]);
-                return $this->failedView($ref);
-            }
-
-            $email        = data_get($txData, 'email', '');
-            $amountKobo   = (int) data_get($txData, 'transaction_amount', data_get($txData, 'amount', 0));
-            $amountNaira  = $amountKobo > 0 ? $amountKobo / 100 : (float) data_get($txData, 'metadata.amount_naira', 0);
-            $customerName = data_get($txData, 'customer_name', data_get($txData, 'metadata.customer_name', 'Valued Donor'));
-
-            // Find existing donor or build a minimal name for display
-            $donor = Donor::where('email', $email)->first();
-
-            // Create donation record (idempotent)
-            $donation = Donation::updateOrCreate(
-                ['payment_reference' => $ref],
-                [
-                    'donor_id'          => $donor?->id,
-                    'amount'            => $amountNaira,
-                    'type'              => 'endowment',
-                    'frequency'         => 'onetime',
-                    'endowment'         => 'yes',
-                    'status'            => 'completed',
-                    'payment_reference' => $ref,
-                    'verified_at'       => now(),
-                    'paid_at'           => now(),
-                ]
-            );
-
-            // Record transaction (idempotent — skip if charge.success already logged)
-            if (!PaymentTransaction::where('payment_reference', $ref)
-                    ->whereIn('event_type', ['charge.success', 'payment.completed'])
-                    ->exists()) {
-                PaymentTransaction::updateOrCreate(
-                    [
-                        'payment_gateway'   => 'squad',
-                        'payment_reference' => $ref,
-                    ],
-                    [
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.success',
-                        'gateway_reference' => data_get($txData, 'transaction_ref', $ref),
-                        'amount'            => $amountNaira,
-                        'currency'          => 'NGN',
-                        'status'            => 'completed',
-                        'gateway_status'    => $status,
-                        'channel'           => data_get($txData, 'payment_type'),
-                        'fee'               => data_get($txData, 'fee', 0),
-                        'response_payload'  => json_encode($data),
-                    ]
-                );
-            }
-
-            // Tier check + email (only if donor exists in our system)
-            $emailSent = false;
-            $tierName  = null;
-
-            if ($donor) {
-                try {
-                    $donation->load('donor', 'project');
-                    (new TierNotificationService())->handleDonationTierCheck($donation);
-                    $emailSent = true;
-
-                    // Refresh donor to get updated tier
-                    $donor->refresh();
-                    if ($donor->donor_tier_id) {
-                        $donor->load('tier');
-                        $tierName = $donor->tier?->name;
-                    }
-                } catch (\Exception $e) {
-                    Log::error('Squad: tier/email step failed', ['ref' => $ref, 'error' => $e->getMessage()]);
-                }
-            } else {
-                // Guest donor — send a generic thank-you email via the closest matching template
-                $emailSent = $this->sendGuestThankYouEmail($email, $customerName, $amountNaira, $ref);
-            }
-
-            $displayName = $donor
-                ? trim("{$donor->surname} {$donor->name}") ?: $customerName
-                : $customerName;
-
-            return view('donation-thank-you', [
-                'success'   => true,
-                'donorName' => $displayName ?: 'Valued Donor',
-                'amount'    => $amountNaira,
-                'email'     => $email,
-                'tierName'  => $tierName,
-                'ref'       => $ref,
-                'emailSent' => $emailSent,
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Squad confirm exception', ['ref' => $ref, 'error' => $e->getMessage()]);
-            return $this->failedView($ref);
-        }
-    }
-
-    /**
-     * API Verification for Mobile App
-     * GET /api/squad/verify/{reference}
-     */
-    public function verifyApi($reference)
-    {
-        if (!$reference) {
-            return response()->json(['success' => false, 'message' => 'Missing reference'], 400);
-        }
-
-        try {
-            $donation = Donation::where('payment_reference', $reference)->first();
-            
-            if (!$donation) {
-                return response()->json(['success' => false, 'message' => 'Donation not found'], 404);
-            }
-
-            if ($donation->status === 'completed') {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Payment already verified',
-                    'data' => ['status' => 'completed']
-                ]);
-            }
-
-            // Verify with Squad
-            $response = Http::withToken($this->secretKey)
-                ->acceptJson()
-                ->timeout(30)
-                ->get("{$this->baseUrl}/transaction/verify/{$reference}");
-
-            if ($response->failed()) {
-                $donation->update(['status' => 'failed']);
-                PaymentTransaction::updateOrCreate(
-                    [
-                        'payment_gateway'   => 'squad',
-                        'payment_reference' => $reference,
-                    ],
-                    [
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.failed',
-                        'gateway_reference' => $reference,
-                        'amount'            => $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'failed',
-                        'gateway_status'    => 'not_found',
-                        'channel'           => null,
-                        'fee'               => 0,
-                        'response_payload'  => json_encode($response->json() ?? []),
-                    ]
-                );
-                return response()->json(['success' => false, 'message' => 'Squad verification failed'], 400);
-            }
-
-            $data   = $response->json();
-            $txData = data_get($data, 'data', []);
-
-            $status      = strtolower(data_get($txData, 'transaction_status', data_get($txData, 'status', '')));
-            $isSuccess   = in_array($status, ['success', 'complete', 'successful', 'approved']);
-
-            if (!$isSuccess) {
-                // If they cancelled, it's not a success, so we should mark it as failed to stop it from pending forever.
-                $donation->update(['status' => 'failed']);
-                PaymentTransaction::updateOrCreate(
-                    [
-                        'payment_gateway'   => 'squad',
-                        'payment_reference' => $reference,
-                    ],
-                    [
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.failed',
-                        'gateway_reference' => data_get($txData, 'transaction_ref', $reference),
-                        'amount'            => $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'failed',
-                        'gateway_status'    => $status,
-                        'channel'           => null,
-                        'fee'               => 0,
-                        'response_payload'  => json_encode($data),
-                    ]
-                );
-                
-                return response()->json(['success' => false, 'message' => 'Payment not successful', 'data' => ['status' => $status]]);
-            }
-
-            $amountKobo   = (int) data_get($txData, 'transaction_amount', data_get($txData, 'amount', 0));
-            $amountNaira  = $amountKobo > 0 ? $amountKobo / 100 : $donation->amount;
-
-            $donation->update([
-                'status'            => 'completed',
-                'amount'            => $amountNaira,
-                'verified_at'       => now(),
-                'paid_at'           => now(),
-            ]);
-
-            PaymentTransaction::updateOrCreate(
-                [
-                    'payment_gateway'   => 'squad',
-                    'payment_reference' => $reference,
-                ],
-                [
-                    'donation_id'       => $donation->id,
-                    'donor_id'          => $donation->donor_id,
-                    'project_id'        => $donation->project_id,
-                    'category'          => $donation->project_id ? 'project' : 'general',
-                    'event_type'        => 'charge.success',
-                    'gateway_reference' => data_get($txData, 'transaction_ref', $reference),
-                    'amount'            => $amountNaira,
-                    'currency'          => 'NGN',
-                    'status'            => 'completed',
-                    'gateway_status'    => $status,
-                    'channel'           => data_get($txData, 'payment_type'),
-                    'fee'               => data_get($txData, 'fee', 0),
-                    'response_payload'  => json_encode($data),
-                ]
-            );
-
-            if ($donation->project_id) {
-                $project = \App\Models\Project::find($donation->project_id);
-                if ($project) {
-                    $raised = Donation::where('project_id', $donation->project_id)->where('status', 'completed')->sum('amount');
-                    $project->update(['raised' => $raised]);
-                }
-            }
-
-            // Send Thank You Email and Tier Check
-            try {
-                $donation->load('donor', 'project');
-                (new TierNotificationService())->handleDonationTierCheck($donation);
-
-                $donor = $donation->donor;
-                if ($donor && $donor->email) {
-                    $donorName = trim("{$donor->surname} {$donor->name}");
-                    $projectName = $donation->project ? $donation->project->project_title : 'GIVE ABU';
-                    
-                    Mail::send('emails.thank-you', [
-                        'donorName'    => $donorName ?: 'Valued Donor',
-                        'amount'       => number_format($amountNaira, 2),
-                        'reference'    => $reference,
-                        'projectName'  => $projectName,
-                        'donationDate' => $donation->paid_at ?? now(),
-                        'donationType' => $donation->endowment === 'yes' ? 'GIVE ABU Fund' : 'Project Donation',
-                        'logoUrl'      => 'https://abu-endowment.cloud/abu_logo_white_for_email.png',
-                    ], function($message) use ($donor) {
-                        $message->from(config('mail.from.address', 'noreply@abu-endowment.edu.ng'), config('mail.from.name', 'GIVE ABU'))
-                                ->to($donor->email)
-                                ->subject('Thank You for Your Generous Donation - GIVE ABU');
-                    });
-                }
-            } catch (\Exception $e) {
-                Log::error('Squad API verify: email failed', ['error' => $e->getMessage()]);
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Payment verified successfully',
-                'data' => [
-                    'status' => 'completed',
-                    'amount' => $amountNaira,
-                    'reference' => $reference
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Squad API verify exception', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error during verification'], 500);
-        }
-    }
-
-    /**
-     * Handle Squad webhook events.
-     * POST /api/squad/webhook
-     */
-    public function webhook(Request $request)
-    {
-        $payload = $request->all();
-        Log::info('Squad webhook received', $payload);
-
-        $event          = $payload['event'] ?? $payload['Event'] ?? null;
-        
-        $data = $payload['data'] ?? $payload['Body'] ?? $payload;
-        $transactionRef = $data['transaction_ref'] ?? $data['TransactionRef'] ?? $payload['transaction_ref'] ?? $payload['TransactionRef'] ?? null;
-
-        if (!$transactionRef) {
-            Log::warning('Squad webhook: Missing transaction_ref', ['payload' => $payload]);
-            return response()->json(['message' => 'Missing transaction_ref'], 200);
-        }
-
-        $donation = Donation::where('payment_reference', $transactionRef)->first();
-
-        if (!$donation) {
-            Log::warning('Squad webhook: Donation not found', ['transaction_ref' => $transactionRef]);
-            return response()->json(['message' => 'Donation not found'], 200);
-        }
-
-        if ($donation->status === 'completed') {
-            return response()->json(['message' => 'Webhook already processed'], 200);
-        }
-
-        $donation->load('donor', 'project');
-        
-        $normalizedEvent = strtolower((string)$event);
-
-        if (in_array($normalizedEvent, ['charge.success', 'charge_successful', 'charge.successful'])) {
-            $donation->update([
-                'status'      => 'completed',
-                'verified_at' => now(),
-                'paid_at'     => $data['paid_at'] ?? now(),
-            ]);
-
-            PaymentTransaction::updateOrCreate(
-                [
-                    'payment_gateway'   => 'squad',
-                    'payment_reference' => $transactionRef,
-                ],
-                [
-                    'donation_id'       => $donation->id,
-                    'donor_id'          => $donation->donor_id,
-                    'project_id'        => $donation->project_id,
-                    'category'          => $donation->project_id ? 'project' : 'general',
-                    'event_type'        => 'charge.success',
-                    'gateway_reference' => $data['id'] ?? $data['transaction_ref'] ?? null,
-                    'amount'            => $data['amount'] ?? $donation->amount,
-                    'currency'          => 'NGN',
-                    'status'            => 'completed',
-                    'gateway_status'    => $data['status'] ?? 'success',
-                    'channel'           => $data['channel'] ?? $data['payment_type'] ?? null,
-                    'fee'               => $data['fee'] ?? 0,
-                    'response_payload'  => json_encode($payload),
-                ]
-            );
-
-            Log::info('Squad webhook: Payment marked as completed', [
-                'donation_id'     => $donation->id,
-                'transaction_ref' => $transactionRef,
-            ]);
-        } elseif (in_array($normalizedEvent, ['charge.failed', 'charge_failed'])) {
-            if ($donation->status !== 'failed') {
-                $donation->update(['status' => 'failed']);
-
-                PaymentTransaction::updateOrCreate(
-                    [
-                        'payment_gateway'   => 'squad',
-                        'payment_reference' => $transactionRef,
-                    ],
-                    [
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.failed',
-                        'gateway_reference' => $data['id'] ?? $data['transaction_ref'] ?? null,
-                        'amount'            => $data['amount'] ?? $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'failed',
-                        'gateway_status'    => $data['status'] ?? 'failed',
-                        'channel'           => $data['channel'] ?? $data['payment_type'] ?? null,
-                        'fee'               => $data['fee'] ?? 0,
-                        'response_payload'  => json_encode($payload),
-                    ]
-                );
-
-                Log::info('Squad webhook: Payment marked as failed', [
-                    'donation_id'     => $donation->id,
-                    'transaction_ref' => $transactionRef,
-                ]);
-            }
-        }
-
-        return response()->json(['message' => 'Webhook processed'], 200);
-    }
-
-    private function failedView(?string $ref)
-    {
-        return view('donation-thank-you', [
-            'success'   => false,
-            'donorName' => 'Guest',
-            'amount'    => 0,
-            'email'     => '',
-            'tierName'  => null,
-            'ref'       => $ref,
-            'emailSent' => false,
-        ]);
-    }
-
-    /**
-     * Send a thank-you email to a guest donor (not in our donors table)
-     * by picking the email template with the lowest min_amount threshold met.
-     */
-    private function sendGuestThankYouEmail(string $email, string $name, float $amount, string $ref): bool
-    {
-        try {
-            // Find the best matching tier template
-            $template = \App\Models\EmailTemplate::join('donor_tiers', 'email_templates.donor_tier_id', '=', 'donor_tiers.id')
-                ->where('email_templates.is_active', true)
-                ->where('donor_tiers.min_amount', '<=', $amount)
-                ->orderBy('donor_tiers.sort_order', 'desc')
-                ->select('email_templates.*')
-                ->first();
-
-            // Fall back to any active template without a tier restriction
-            if (!$template) {
-                $template = \App\Models\EmailTemplate::where('is_active', true)
-                    ->whereNull('donor_tier_id')
-                    ->first();
-            }
-
-            if (!$template) {
-                return false;
-            }
-
-            $variables = [
-                'donor_name'       => $name,
-                'donor_email'      => $email,
-                'amount'           => '₦' . number_format($amount, 2),
-                'reference'        => $ref,
-                'payment_reference'=> $ref,
-                'donation_date'    => now()->format('d M Y'),
-                'project_name'     => 'GIVE ABU',
-                'organization_name'=> 'GIVE ABU',
-                'tier_name'        => '',
-                'total_amount'     => '₦' . number_format($amount, 2),
-                'donation_type'    => 'General Donation',
-            ];
-
-            $body    = $this->replaceVars($template->body_html ?? '', $variables);
-            $subject = $this->replaceVars($template->subject ?? 'Thank you for your donation', $variables);
-
-            Mail::html($body, function ($msg) use ($email, $name, $subject) {
-                $msg->to($email, $name)
-                    ->subject($subject)
-                    ->from(
-                        config('mail.from.address', 'noreply@abu-endowment.edu.ng'),
-                        config('mail.from.name', 'GIVE ABU')
-                    );
-            });
-
-            return true;
-        } catch (\Exception $e) {
-            Log::error('Squad: guest thank-you email failed', ['error' => $e->getMessage()]);
+        // Query strings are allowed; URL bases are exact, never suffix/substring matches.
+        if (preg_match('/[\x00-\x20\\\\]/', $callback) || str_contains($callback, '#')) {
             return false;
         }
+        $base = explode('?', $callback, 2)[0];
+        $allowed = array_merge([url('/donation/thank-you')], config('services.squad.callback_urls', []));
+
+        return in_array($base, $allowed, true);
     }
 
-    private function replaceVars(string $text, array $vars): string
+    public function verifyApi(string $reference)
     {
-        foreach ($vars as $key => $value) {
-            $text = str_replace('{{' . $key . '}}', $value, $text);
-            $text = str_replace('{{ ' . $key . ' }}', $value, $text);
-            $text = str_replace('[' . $key . ']', $value, $text);
+        try {
+            $result = $this->payments->verify($reference);
+            $donation = $result['donation'];
+            $code = match ($result['outcome']) {
+                'not_found' => 404, 'wrong_gateway', 'rejected' => 422, 'unavailable' => 503, default => 200,
+            };
+
+            return response()->json([
+                'success' => $result['success'],
+                'message' => $result['success'] ? 'Payment verified successfully' : 'Payment confirmation: '.$result['outcome'],
+                'data' => ['status' => $donation?->status ?? 'pending', 'verification_status' => $result['outcome'],
+                    'amount' => $donation?->amount, 'reference' => $reference],
+            ], $code);
+        } catch (\Throwable $e) {
+            Log::error('Squad verification could not be recorded', ['exception' => get_class($e)]);
+
+            return response()->json(['success' => false, 'message' => 'Payment confirmation is temporarily unavailable.'], 503);
         }
-        return $text;
+    }
+
+    public function confirm(Request $request)
+    {
+        $reference = $request->query('transaction_ref');
+        $result = ['success' => false, 'donation' => null, 'outcome' => 'pending'];
+        if (is_string($reference) && strlen($reference) <= 255) {
+            try {
+                $result = $this->payments->verify($reference);
+            } catch (\Throwable $e) {
+                Log::error('Squad callback verification unavailable', ['exception' => get_class($e)]);
+                $result['outcome'] = 'unavailable';
+            }
+        }
+        $donation = $result['donation'];
+        $donor = $donation?->donor;
+
+        return view('donation-thank-you', [
+            'success' => $result['success'], 'paymentState' => $result['outcome'],
+            'donorName' => $result['success'] ? (trim(($donor?->surname ?? '').' '.($donor?->name ?? '')) ?: 'Valued Donor') : 'Guest',
+            'amount' => $result['success'] ? $donation->amount : 0, 'email' => $result['success'] ? ($donor?->email ?? '') : '',
+            'tierName' => $result['success'] ? $donor?->tier?->name : null,
+            'ref' => is_string($reference) ? $reference : null,
+            'emailSent' => $result['success'] && $donation->transactions()->where('event_type', 'notification.sent')->exists(),
+        ]);
+    }
+
+    public function webhook(Request $request)
+    {
+        $signature = $request->header('x-squad-encrypted-body');
+        $secret = (string) config('services.squad.secret_key');
+        if ($secret === '' || ! is_string($signature) || ! preg_match('/\A[0-9A-Fa-f]{128}\z/', $signature)
+            || ! hash_equals(strtoupper(hash_hmac('sha512', $request->getContent(), $secret)), strtoupper($signature))) {
+            return response()->json(['message' => 'Invalid webhook signature'], 401);
+        }
+        $reference = $request->input('Body.transaction_ref') ?? $request->input('data.transaction_ref')
+            ?? $request->input('TransactionRef') ?? $request->input('transaction_ref');
+        if (! is_string($reference) || $reference === '' || strlen($reference) > 255) {
+            return response()->json(['message' => 'Missing transaction reference'], 400);
+        }
+        try {
+            $result = $this->payments->verify($reference);
+
+            // Retry outages; acknowledge safe rejections and unknown references for manual reconciliation.
+            return response()->json(['message' => 'Payment confirmation: '.$result['outcome']], $result['outcome'] === 'unavailable' ? 503 : 200);
+        } catch (\Throwable $e) {
+            Log::error('Squad webhook processing unavailable', ['exception' => get_class($e)]);
+
+            return response()->json(['message' => 'Please retry payment confirmation'], 503);
+        }
     }
 }

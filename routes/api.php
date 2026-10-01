@@ -327,8 +327,6 @@ Route::post('/interswitch/pay', [InterswitchPaymentController::class, 'initiate'
 // Route::match(['get', 'post'], '/interswitch/process-checkout/{txn_ref}', [InterswitchPaymentController::class, 'processCheckout'])->name('api.interswitch.process-checkout');
 Route::any('/interswitch/process-checkout/{txn_ref}', [InterswitchPaymentController::class, 'processCheckout']);
 
-Route::any('/interswitch/process-checkout/{txn_ref}', [InterswitchPaymentController::class, 'processCheckout']);
-
 Route::post('/interswitch/redirect', [InterswitchPaymentController::class, 'handleRedirect'])->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 Route::post('/interswitch/webhook', [InterswitchPaymentController::class, 'webhook'])->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 

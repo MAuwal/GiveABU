@@ -152,8 +152,8 @@ class DonorController extends Controller
                 'endowment' => $request->endowment,
                 'type' => $request->type, // CRITICAL: Required by database
                 'frequency' => 'onetime', // Default to onetime
-                'status' => 'completed', // Dummy payment = success
-                'payment_reference' => 'FLUTTERWAVE_' . time() . '_' . $donor->id,
+                'status' => 'pending', // Only gateway verification may complete a payment.
+                'payment_reference' => 'DONATION_' . \Illuminate\Support\Str::uuid(),
             ]);
 
             // Load relationships for response

@@ -42,17 +42,8 @@ class ProjectDonationsPage extends Component
     
     public function syncRaisedAmounts()
     {
-        // Recalculate raised amount for all projects
-        $allProjects = Project::all();
-        foreach ($allProjects as $project) {
-            $totalRaised = Donation::where('project_id', $project->id)
-                                   ->whereIn('status', ['success', 'paid', 'completed', 'Success', 'Paid', 'Completed'])
-                                   ->sum('amount');
-            
-            if ($project->raised != $totalRaised) {
-                $project->raised = $totalRaised;
-                $project->save();
-            }
+        foreach (Project::pluck('id') as $projectId) {
+            app(\App\Services\ProjectFundingService::class)->rebuild($projectId);
         }
     }
 
@@ -253,10 +244,9 @@ class ProjectDonationsPage extends Component
                         if ($donation->project_id) {
                             $project = Project::find($donation->project_id);
                             if ($project) {
-                                $totalRaised = Donation::where('project_id', $project->id)
-                                                       ->whereIn('status', ['success', 'paid', 'completed', 'Success', 'Paid', 'Completed'])
-                                                       ->sum('amount');
-                                $project->update(['raised' => $totalRaised]);
+                                app(\App\Services\ProjectFundingService::class)->rebuild($project->id);
+                                $project->refresh();
+                                $totalRaised = $project->raised;
                             }
                         }
                         
