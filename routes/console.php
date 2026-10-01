@@ -8,6 +8,8 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 if (config('hardening.payment_recovery_enabled')) {
+    \Illuminate\Support\Facades\Schedule::command('payments:dispatch-notifications --limit=500')
+        ->everyMinute()->onOneServer()->withoutOverlapping(5);
     \Illuminate\Support\Facades\Schedule::command('payments:queue-pending --limit=500')
         ->everyMinute()->onOneServer()->withoutOverlapping(5);
 }

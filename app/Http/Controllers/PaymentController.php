@@ -326,57 +326,57 @@ class PaymentController extends Controller
                 ]);
 
                 if ($isSuccessful) {
-                    // Idempotent: donation may already exist if webhook fired first
-                    if (!$donation) {
-                        $meta = $data['metadata'] ?? [];
-                        $donation = Donation::create([
-                            'donor_id'          => $meta['donor_id'] ?? null,
-                            'project_id'        => $meta['project_id'] ?? null,
-                            'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : ($meta['amount_naira'] ?? 0),
-                            'type'              => $meta['type'] ?? ($meta['endowment'] === 'yes' ? 'endowment' : 'project'),
-                            'frequency'         => $meta['frequency'] ?? 'onetime',
-                            'endowment'         => $meta['endowment'] ?? 'no',
-                            'status'            => 'completed',
+                    DB::transaction(function () use (&$donation, $data, $reference) {
+                        // Idempotent: donation may already exist if webhook fired first
+                        if (!$donation) {
+                            $meta = $data['metadata'] ?? [];
+                            $donation = Donation::create([
+                                'donor_id'          => $meta['donor_id'] ?? null,
+                                'project_id'        => $meta['project_id'] ?? null,
+                                'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : ($meta['amount_naira'] ?? 0),
+                                'type'              => $meta['type'] ?? ($meta['endowment'] === 'yes' ? 'endowment' : 'project'),
+                                'frequency'         => $meta['frequency'] ?? 'onetime',
+                                'endowment'         => $meta['endowment'] ?? 'no',
+                                'status'            => 'completed',
+                                'payment_reference' => $data['reference'] ?? $reference,
+                                'verified_at'       => now(),
+                                'paid_at'           => $data['paid_at'] ?? now(),
+                            ]);
+                            $donation->load('donor', 'project');
+                            Log::info('Donation created on successful verify', ['donation_id' => $donation->id, 'reference' => $reference]);
+                        } else {
+                            $donation->update([
+                                'status'      => 'completed',
+                                'verified_at' => now(),
+                                'paid_at'     => $data['paid_at'] ?? now(),
+                            ]);
+                        }
+
+                        // Record the successful verification as a transaction event
+                        PaymentTransaction::create([
+                            'donation_id'       => $donation->id,
+                            'donor_id'          => $donation->donor_id,
+                            'project_id'        => $donation->project_id,
+                            'payment_gateway'   => 'paystack',
+                            'category'          => $donation->project_id ? 'project' : 'general',
+                            'event_type'        => 'charge.success',
                             'payment_reference' => $data['reference'] ?? $reference,
-                            'verified_at'       => now(),
-                            'paid_at'           => $data['paid_at'] ?? now(),
+                            'gateway_reference' => $data['reference'] ?? $reference,
+                            'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : $donation->amount,
+                            'currency'          => 'NGN',
+                            'status'            => 'completed',
+                            'gateway_status'    => $data['status'] ?? 'success',
+                            'channel'           => $data['channel'] ?? null,
+                            'fee'               => isset($data['fees']) ? ($data['fees'] / 100) : 0,
+                            'response_payload'  => json_encode($data),
                         ]);
-                        $donation->load('donor', 'project');
-                        Log::info('Donation created on successful verify', ['donation_id' => $donation->id, 'reference' => $reference]);
-                    } else {
-                        $donation->update([
-                            'status'      => 'completed',
-                            'verified_at' => now(),
-                            'paid_at'     => $data['paid_at'] ?? now(),
-                        ]);
-                    }
 
-                    // Record the successful verification as a transaction event
-                    PaymentTransaction::create([
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'payment_gateway'   => 'paystack',
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.success',
-                        'payment_reference' => $data['reference'] ?? $reference,
-                        'gateway_reference' => $data['reference'] ?? $reference,
-                        'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'completed',
-                        'gateway_status'    => $data['status'] ?? 'success',
-                        'channel'           => $data['channel'] ?? null,
-                        'fee'               => isset($data['fees']) ? ($data['fees'] / 100) : 0,
-                        'response_payload'  => json_encode($data),
-                    ]);
+                        if ($donation->project_id) {
+                            $this->updateProjectRaised($donation->project_id, $donation->id);
+                        }
 
-                    if ($donation->project_id) {
-                        $this->updateProjectRaised($donation->project_id, $donation->id);
-                    }
-
-                    app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
-                    $this->sendThankYouEmail($donation);
-                    (new TierNotificationService())->handleDonationTierCheck($donation);
+                        app(\App\Services\PaymentNotificationOutbox::class)->enqueue($donation, 'paystack');
+                    });
                 } elseif ($donation) {
                     // Payment failed — update existing donation record and log a transaction
                     $donation->update([
@@ -509,88 +509,88 @@ class PaymentController extends Controller
      */
     private function handleSuccessfulPayment($data)
     {
-        $reference = $data['reference'] ?? null;
+        return DB::transaction(function () use ($data) {
+            $reference = $data['reference'] ?? null;
         
-        if (!$reference) {
-            Log::warning('Paystack webhook: Missing reference in successful payment');
-            return response()->json(['message' => 'Missing reference'], 200);
-        }
-
-        // Find donation by reference — may not exist yet if verify() hasn't fired
-        $donation = Donation::where('payment_reference', $reference)->first();
-
-        if (!$donation) {
-            // Create the donation from webhook metadata (Paystack includes full metadata)
-            $meta = $data['metadata'] ?? [];
-            $donorId = $meta['donor_id'] ?? null;
-
-            if (!$donorId) {
-                Log::warning('Paystack webhook: No donor_id in metadata, cannot create donation', ['reference' => $reference]);
-                return response()->json(['message' => 'Missing donor info in metadata'], 200);
+            if (!$reference) {
+                Log::warning('Paystack webhook: Missing reference in successful payment');
+                return response()->json(['message' => 'Missing reference'], 200);
             }
 
-            $donation = Donation::create([
-                'donor_id'          => $donorId,
-                'project_id'        => $meta['project_id'] ?? null,
-                'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : ($meta['amount_naira'] ?? 0),
-                'type'              => $meta['type'] ?? ($meta['endowment'] === 'yes' ? 'endowment' : 'project'),
-                'frequency'         => $meta['frequency'] ?? 'onetime',
-                'endowment'         => $meta['endowment'] ?? 'no',
-                'status'            => 'completed',
-                'payment_reference' => $reference,
-                'verified_at'       => now(),
-                'paid_at'           => $data['paid_at'] ?? now(),
+            // Find donation by reference — may not exist yet if verify() hasn't fired
+            $donation = Donation::where('payment_reference', $reference)->first();
+
+            if (!$donation) {
+                // Create the donation from webhook metadata (Paystack includes full metadata)
+                $meta = $data['metadata'] ?? [];
+                $donorId = $meta['donor_id'] ?? null;
+
+                if (!$donorId) {
+                    Log::warning('Paystack webhook: No donor_id in metadata, cannot create donation', ['reference' => $reference]);
+                    return response()->json(['message' => 'Missing donor info in metadata'], 200);
+                }
+
+                $donation = Donation::create([
+                    'donor_id'          => $donorId,
+                    'project_id'        => $meta['project_id'] ?? null,
+                    'amount'            => isset($data['amount']) ? ($data['amount'] / 100) : ($meta['amount_naira'] ?? 0),
+                    'type'              => $meta['type'] ?? ($meta['endowment'] === 'yes' ? 'endowment' : 'project'),
+                    'frequency'         => $meta['frequency'] ?? 'onetime',
+                    'endowment'         => $meta['endowment'] ?? 'no',
+                    'status'            => 'completed',
+                    'payment_reference' => $reference,
+                    'verified_at'       => now(),
+                    'paid_at'           => $data['paid_at'] ?? now(),
+                ]);
+
+                Log::info('Paystack webhook: Donation created from webhook', ['donation_id' => $donation->id, 'reference' => $reference]);
+            }
+
+            // Load relationships
+            $donation->load('donor', 'project');
+
+            // Update status (idempotent — already completed if created above)
+            $donation->update([
+                'status'      => 'completed',
+                'verified_at' => now(),
+                'paid_at'     => $data['paid_at'] ?? now(),
             ]);
 
-            Log::info('Paystack webhook: Donation created from webhook', ['donation_id' => $donation->id, 'reference' => $reference]);
-        }
+            // Create payment transaction record
+            PaymentTransaction::create([
+                'donation_id' => $donation->id,
+                'donor_id' => $donation->donor_id,
+                'project_id' => $donation->project_id,
+                'payment_gateway' => 'paystack',
+                'category' => $donation->project_id ? 'project' : 'general',
+                'event_type' => 'charge.success',
+                'payment_reference' => $reference,
+                'gateway_reference' => $data['id'] ?? null,
+                'amount' => ($data['amount'] ?? 0) / 100,
+                'currency' => 'NGN',
+                'status' => 'completed',
+                'gateway_status' => $data['status'] ?? 'success',
+                'channel' => $data['channel'] ?? null,
+                'fee' => ($data['fees'] ?? 0) / 100,
+                'response_payload' => json_encode($data),
+            ]);
 
-        // Load relationships
-        $donation->load('donor', 'project');
+            // Update project raised amount if donation has project_id
+            if ($donation->project_id) {
+                $this->updateProjectRaised($donation->project_id, $donation->id);
+            }
 
-        // Update status (idempotent — already completed if created above)
-        $donation->update([
-            'status'      => 'completed',
-            'verified_at' => now(),
-            'paid_at'     => $data['paid_at'] ?? now(),
-        ]);
+            // Send thank you email and tier notification
+            app(\App\Services\PaymentNotificationOutbox::class)->enqueue($donation, 'paystack');
 
-        // Create payment transaction record
-        PaymentTransaction::create([
-            'donation_id' => $donation->id,
-            'donor_id' => $donation->donor_id,
-            'project_id' => $donation->project_id,
-            'payment_gateway' => 'paystack',
-            'category' => $donation->project_id ? 'project' : 'general',
-            'event_type' => 'charge.success',
-            'payment_reference' => $reference,
-            'gateway_reference' => $data['id'] ?? null,
-            'amount' => ($data['amount'] ?? 0) / 100,
-            'currency' => 'NGN',
-            'status' => 'completed',
-            'gateway_status' => $data['status'] ?? 'success',
-            'channel' => $data['channel'] ?? null,
-            'fee' => ($data['fees'] ?? 0) / 100,
-            'response_payload' => json_encode($data),
-        ]);
+            Log::info('Paystack webhook: Payment marked as completed', [
+                'donation_id' => $donation->id,
+                'reference' => $reference,
+                'amount' => $data['amount'] ?? null
+            ]);
 
-        // Update project raised amount if donation has project_id
-        if ($donation->project_id) {
-            $this->updateProjectRaised($donation->project_id, $donation->id);
-        }
-
-        // Send thank you email and tier notification
-        app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
-        $this->sendThankYouEmail($donation);
-        (new TierNotificationService())->handleDonationTierCheck($donation);
-
-        Log::info('Paystack webhook: Payment marked as completed', [
-            'donation_id' => $donation->id,
-            'reference' => $reference,
-            'amount' => $data['amount'] ?? null
-        ]);
-
-        return response()->json(['message' => 'Payment processed successfully'], 200);
+            return response()->json(['message' => 'Payment processed successfully'], 200);
+        });
     }
 
     /**

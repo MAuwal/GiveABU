@@ -343,6 +343,37 @@ class ApiSecurityTest extends TestCase
             ->get('/forgot-password')->assertOk()->assertSee('Check your email')->assertSee('Check your inbox and spam folder.');
     }
 
+    public function test_session_cookie_configuration_preserves_environment_values(): void
+    {
+        $keys = ['SESSION_SECURE_COOKIE', 'SESSION_DOMAIN', 'SESSION_SAME_SITE'];
+        $before = [];
+        foreach ($keys as $key) {
+            $before[$key] = [$_ENV[$key] ?? null, $_SERVER[$key] ?? null];
+        }
+        try {
+            $_ENV['SESSION_SECURE_COOKIE'] = $_SERVER['SESSION_SECURE_COOKIE'] = 'true';
+            $_ENV['SESSION_DOMAIN'] = $_SERVER['SESSION_DOMAIN'] = '.giveabu.com';
+            $_ENV['SESSION_SAME_SITE'] = $_SERVER['SESSION_SAME_SITE'] = 'strict';
+            $session = require config_path('session.php');
+            $this->assertTrue($session['secure']);
+            $this->assertSame('.giveabu.com', $session['domain']);
+            $this->assertSame('strict', $session['same_site']);
+        } finally {
+            foreach ($before as $key => [$envValue, $serverValue]) {
+                if ($envValue === null) {
+                    unset($_ENV[$key]);
+                } else {
+                    $_ENV[$key] = $envValue;
+                }
+                if ($serverValue === null) {
+                    unset($_SERVER[$key]);
+                } else {
+                    $_SERVER[$key] = $serverValue;
+                }
+            }
+        }
+    }
+
     public function test_admin_website_password_recovery_uses_local_broker_link(): void
     {
         Schema::table('users', function (Blueprint $table) {

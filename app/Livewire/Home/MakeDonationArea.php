@@ -132,12 +132,14 @@ class MakeDonationArea extends Component
                     $donation = Donation::where('payment_reference', $reference)->first();
 
                     if ($donation) {
-                        $donation->update([
-                            'status'      => 'completed',
-                            'verified_at' => now(),
-                            'paid_at'     => now(),
-                        ]);
-                        app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
+                        \Illuminate\Support\Facades\DB::transaction(function () use ($donation) {
+                            $donation->update([
+                                'status'      => 'completed',
+                                'verified_at' => now(),
+                                'paid_at'     => now(),
+                            ]);
+                            app(\App\Services\PaymentNotificationOutbox::class)->enqueue($donation, 'paystack');
+                        });
                         $this->dispatch('donation-completed');
                     }
 
