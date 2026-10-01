@@ -43,20 +43,20 @@ class DonorsController extends Controller
             'other_name' => 'nullable|string|max:255',
             'email' => 'required|email',
             'phone' => 'required|string|max:20',
-            'password' => 'nullable|string|min:6',
+            'password' => 'required|string|min:8',
             'device_fingerprint' => 'nullable|string|max:500',
             'session_id' => 'nullable|exists:donor_sessions,id',
         ];
         
         // Add conditional validation based on donor type
         if ($isAlumni) {
-            $validationRules['department_id'] = 'required|exists:departments,id';
+            $validationRules['department_id'] = ($request->attributes->get('web_registration') ? 'nullable' : 'required').'|exists:departments,id';
             $validationRules['entry_year'] = 'nullable|integer|min:1950|max:' . date('Y');
             $validationRules['graduation_year'] = 'nullable|integer|min:1950|max:' . date('Y');
             $validationRules['reg_number'] = 'nullable|string|max:255';
 
         } elseif ($normalizedType === 'staff') {
-            $validationRules['department_id'] = 'required|exists:departments,id';
+            $validationRules['department_id'] = ($request->attributes->get('web_registration') ? 'nullable' : 'required').'|exists:departments,id';
 
         } elseif ($normalizedType === 'corporate') {
             $validationRules['organization_name'] = 'required|string|max:255';
@@ -86,10 +86,13 @@ class DonorsController extends Controller
         try {
             // Check if a donor with this email already exists
             $existingDonor = Donor::where('email', $request->email)->first();
-            // Re-registering an email is idempotent; its session is updated below.
+            if ($existingDonor || DonorSession::where('username', $request->email)->exists()) {
+                return response()->json(['success' => false, 'message' => 'Account already exists. Please sign in or recover access.'], 409);
+            }
 
             // Prepare data for creation
-            $donorData = $request->except(['password', 'device_fingerprint', 'session_id']);
+            $donorData = $validator->validated();
+            unset($donorData['password'], $donorData['device_fingerprint'], $donorData['session_id']);
             
             // Handle different donor types
             if ($normalizedType === 'supporter') {
@@ -137,13 +140,13 @@ class DonorsController extends Controller
             $fingerprint = $request->input('device_fingerprint');
             if ($fingerprint) {
                 $deviceSession = DeviceSession::firstOrCreate(
-                    ['device_fingerprint' => $fingerprint],
+                    ['device_fingerprint' => $fingerprint, 'donor_id' => $donor->id],
                     [
                         'donor_id' => $donor->id,
                         'session_token' => Str::random(64),
                         'user_agent' => $request->userAgent() ?? 'unknown',
                         'ip_address' => $request->ip() ?? '0.0.0.0',
-                        'expires_at' => now()->addYears(10),
+                        'expires_at' => now()->addDays(30),
                     ]
                 );
                 // Update donor_id if device existed but had no donor
@@ -155,27 +158,14 @@ class DonorsController extends Controller
             // Email is the login username and phone is the initial password.
             $sessionValues = [
                 'donor_id' => $donor->id,
-                'password' => $donor->phone,
+                'password' => $request->password,
                 'device_session_id' => $deviceSession?->id,
                 'auth_provider' => 'email',
             ];
 
-            try {
-                $session = DonorSession::updateOrCreate(
-                    ['username' => $donor->email],
-                    $sessionValues
-                );
-            } catch (QueryException $exception) {
-                // Recover if a concurrent request inserted the same username.
-                $session = DonorSession::where('username', $donor->email)->first();
+            $session = DonorSession::create(['username' => $donor->email] + $sessionValues);
+            $accessToken = app(\App\Services\DonorTokenService::class)->issue($session);
 
-                if (!$session) {
-                    throw $exception;
-                }
-
-                $session->update($sessionValues);
-            }
-            
             Log::info('Donor registered successfully', [
                 'donor_id' => $donor->id,
                 'email' => $donor->email,
@@ -191,19 +181,19 @@ class DonorsController extends Controller
                     'donor' => new DonorResource($donor),
                     'session_id' => $session->id,
                     'username' => $session->username,
-                    'auth_token' => $session->id,
+                    'auth_token' => $accessToken,
                     'device_session_id' => $deviceSession?->id,
-                    'session_token' => $deviceSession?->session_token,
+                    'session_token' => $accessToken,
                 ],
             ], 201);
         } catch (\Exception $e) {
-            Log::error('Donor registration error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
+            Log::error('Donor registration error. ', [
+                'exception' => get_class($e),
             ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed. Please try again.',
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ], 500);
         }
     }
@@ -245,7 +235,7 @@ class DonorsController extends Controller
             'nationality'       => 'nullable|string|max:255',
             'nin'               => 'nullable|string|digits:11',
             'address'           => 'nullable|string',
-            'profile_image'     => 'nullable|string',
+            'profile_image'     => 'prohibited',
             'program_ids'       => 'nullable|array',
             'program_ids.*'     => 'integer|exists:programs,id',
             'donor_tier_id'     => 'nullable|exists:donor_tiers,id',
@@ -287,11 +277,11 @@ class DonorsController extends Controller
                 'donor' => new DonorResource($donor)
             ]);
         } catch (\Exception $e) {
-            Log::error('Donor update error: ' . $e->getMessage());
+            Log::error('Donor update error. ');
             return response()->json([
                 'success' => false,
                 'message' => 'Update failed. Please try again.',
-                'error' => $e->getMessage()
+                'exception' => get_class($e)
             ], 500);
         }
     }
@@ -362,7 +352,7 @@ class DonorsController extends Controller
         }
 
         // Check if the device fingerprint is associated with any donor via DeviceSession
-        $deviceSession = DeviceSession::where('device_fingerprint', $request->device_fingerprint)
+        $deviceSession = DeviceSession::where('donor_id', $request->attributes->get('authenticated_donor_session')?->donor_id)->where('device_fingerprint', $request->device_fingerprint)
             ->where('expires_at', '>', now())
             ->with('donor')
             ->first();
@@ -374,7 +364,7 @@ class DonorsController extends Controller
                 'recognized' => true,
                 'donor' => new DonorResource($deviceSession->donor),
                 'device_session_id' => $deviceSession->id,
-                'session_token' => $deviceSession->session_token,
+                'session_token' => null,
                 'donor_session' => $donorSession ? [
                     'id' => $donorSession->id,
                     'username' => $donorSession->username,
@@ -448,14 +438,13 @@ class DonorsController extends Controller
         } catch (\Exception $e) {
             Log::error('Error uploading profile image', [
                 'donor_id' => $id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'exception' => get_class($e)
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Error uploading profile image: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Error uploading profile image. '], 500);
         }
     }
 
@@ -497,7 +486,7 @@ class DonorsController extends Controller
                 'donor_id' => $donor->id,
                 'session_id' => $sessionId,
                 'email' => $email,
-                'error' => $e->getMessage(),
+                'exception' => get_class($e),
             ]);
         }
     }

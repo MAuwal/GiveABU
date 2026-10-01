@@ -35,10 +35,9 @@ class HeaderSection extends Component
             // Check session first
             if (Session::has('donor_token')) {
                 $token = Session::get('donor_token');
-                Log::info('HeaderSection: Found token in session', ['token' => $token]);
                 
                 // Use direct DB query instead of HTTP request to avoid self-request timeout
-                $donorSession = DonorSession::with('donor')->find($token);
+                $donorSession = app(\App\Services\DonorTokenService::class)->resolve($token)?->load('donor');
                 
                 if ($donorSession) {
                     $this->user = [
@@ -53,7 +52,6 @@ class HeaderSection extends Component
                     Log::info('HeaderSection: Auth successful', ['user' => $this->user]);
                     return;
                 } else {
-                    Log::info('HeaderSection: Session not found in DB', ['id' => $token]);
                 }
             } else {
                 Log::info('HeaderSection: No token in session');
@@ -74,7 +72,7 @@ class HeaderSection extends Component
     {
         if (!Session::has('donor_token')) return;
 
-        $donorSession = DonorSession::with('donor')->find(Session::get('donor_token'));
+        $donorSession = app(\App\Services\DonorTokenService::class)->resolve(Session::get('donor_token'))?->load('donor');
 
         if (!$donorSession || $donorSession->email_verified_at) return;
 
@@ -94,7 +92,12 @@ class HeaderSection extends Component
 
     public function logout()
     {
+        $token = Session::get('donor_token');
+        if (is_string($token)) {
+            \Illuminate\Support\Facades\DB::table('donor_access_tokens')->where('token_hash', hash('sha256', $token))->delete();
+        }
         Session::forget('donor_token');
+        Session::regenerate();
         Session::save();
         $this->js('window.location.href = "/"');
     }

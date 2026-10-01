@@ -35,9 +35,7 @@ return [
         'capacitor://192.168.18.2:8000',
     ],
 
-    'allowed_origins_patterns' => [
-        '#^https://[a-zA-Z0-9\-]+\.vercel\.app$#',
-    ],
+    'allowed_origins_patterns' => [],
 
     'allowed_headers' => ['*'],
 

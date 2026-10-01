@@ -23,8 +23,8 @@ class MessageController extends Controller
         if ($donor instanceof \Illuminate\Http\JsonResponse) return $donor;
 
         $validator = Validator::make($request->all(), [
-            'receiver_id' => 'required|exists:donors,id|different:' . $donor->id,
-            'content' => 'required|string',
+            'receiver_id' => ['required', 'integer', 'exists:donors,id', \Illuminate\Validation\Rule::notIn([$donor->id])],
+            'content' => 'required|string|max:10000',
             'subject' => 'nullable|string|max:255',
         ]);
 
