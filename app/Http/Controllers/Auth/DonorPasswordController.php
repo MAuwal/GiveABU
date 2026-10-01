@@ -40,7 +40,7 @@ class DonorPasswordController extends Controller
             app(DonorSessionController::class)->forgotPassword($request, true);
         }
 
-        return back()->with('status', 'If the email exists, a reset link has been sent.');
+        return back()->with('status', 'If this email is linked to an eligible account or donor profile, we have sent a password reset link. Check your inbox and spam folder.')->with('recovery_requested', true);
     }
 
     public function setup(Request $request, Donor $donor)

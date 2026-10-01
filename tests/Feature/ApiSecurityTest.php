@@ -271,7 +271,7 @@ class ApiSecurityTest extends TestCase
     {
         \Illuminate\Support\Facades\Mail::fake();
         $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => 'missing@example.test'])
-            ->assertRedirect('/forgot-password')->assertSessionHas('status', 'If the email exists, a reset link has been sent.');
+            ->assertRedirect('/forgot-password')->assertSessionHas('recovery_requested', true);
         \Illuminate\Support\Facades\Mail::assertNothingSent();
         DB::table('password_resets')->insert(['donor_session_id' => $this->session->id, 'token' => 'expired-token',
             'used' => false, 'expires_at' => now()->subMinute()]);
@@ -332,6 +332,17 @@ class ApiSecurityTest extends TestCase
         $this->assertFalse(DonorSession::where('donor_id', $profile->id)->exists());
     }
 
+    public function test_reset_email_uses_giveabu_logo_and_recovery_page_shows_confirmation(): void
+    {
+        $html = (new \App\Mail\PasswordResetLinkMail('https://giveabu.com/reset-password?token=test', 'test@example.test'))->render();
+        $this->assertStringContainsString('abu_logo_white_for_email.png', $html);
+        $this->assertStringContainsString('GiveABU logo', $html);
+        $this->assertStringNotContainsString('laravel.com/img/notification-logo.png', $html);
+        $this->assertStringContainsString('Powered by @KADICT Hub', $html);
+        $this->withSession(['recovery_requested' => true, 'status' => 'Check your inbox and spam folder.'])
+            ->get('/forgot-password')->assertOk()->assertSee('Check your email')->assertSee('Check your inbox and spam folder.');
+    }
+
     public function test_admin_website_password_recovery_uses_local_broker_link(): void
     {
         Schema::table('users', function (Blueprint $table) {
@@ -359,7 +370,7 @@ class ApiSecurityTest extends TestCase
             return true;
         });
         $this->from('/admin/forgot-password')->post('/forgot-password', ['email' => 'absent@example.test'])
-            ->assertRedirect('/admin/forgot-password')->assertSessionHas('status', 'If the email exists, a reset link has been sent.');
+            ->assertRedirect('/admin/forgot-password')->assertSessionHas('recovery_requested', true);
     }
 
     public function test_otp_guess_limit_is_shared_across_source_ips(): void

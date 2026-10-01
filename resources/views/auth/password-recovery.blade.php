@@ -16,8 +16,10 @@
 </head>
 <body>
 <main>
-    <h1>{{ $reset ? 'Reset password' : 'Forgot password' }}</h1>
+    <h1>{{ session('recovery_requested') ? 'Check your email' : ($reset ? 'Reset password' : 'Forgot password') }}</h1>
+    @unless(session('recovery_requested'))
     <p>{{ $reset ? 'Choose a new password with at least 8 characters.' : 'Enter your account email to receive a password reset link. If you registered with Google, use Sign in with Google.' }}</p>
+    @endunless
     @if(session('status')) <p role="status">{{ session('status') }}</p> @endif
     @if($errors->any())
         <div class="error" role="alert">@foreach($errors->all() as $error)<p>{{ $error }}</p>@endforeach</div>

@@ -23,10 +23,10 @@ class PasswordResetLinkController extends Controller
             Log::error('Failed to send account password reset email', ['exception' => get_class($e)]);
         }
 
-        $message = 'If the email exists, a reset link has been sent.';
+        $message = 'If this email is linked to an eligible account, we have sent a password reset link. Check your inbox and spam folder.';
 
         return $request->expectsJson()
             ? response()->json(['status' => $message])
-            : back()->with('status', $message);
+            : back()->with('status', $message)->with('recovery_requested', true);
     }
 }
