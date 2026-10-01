@@ -12,7 +12,7 @@ High: Google login validates configured audience, issuer, expiry, subject and ve
 
 Medium: authentication, verification and general API requests have IP quotas; web password login also has a credential/IP quota. OTP delivery/guess quotas are shared by recipient across IPs. Webhooks are excluded from user IP quotas. Debug endpoints return 404 and legacy passwordless login endpoints return 410. Sensitive directory fields retain response keys with null values for other donors. Tokens and verification secrets are hidden from model serialization; touched authentication logs no longer include request bodies or raw provider errors. CORS no longer trusts every Vercel tenant.
 
-Hardcoded SMS credentials and seeded account passwords have no source defaults. Ozeki includes use require_once so repeated verification calls do not redeclare classes.
+Hardcoded SMS credentials and seeded account passwords have no source defaults. SMS sending uses Kudi exclusively.
 
 ## Mobile and web compatibility
 
@@ -40,8 +40,10 @@ The full suite reports 50 passed, 9 failed (198 assertions). These same nine fai
 
 ## KudiSMS provider correction
 
-All active SMS sending uses KudiSMS. SmsService delegates verification, welcome, donation-confirmation and password-reset messages to KudiSmsService; API/admin sending uses the same provider. Ozeki configuration and runtime includes are removed. Existing vendor files remain unused. SMS history reads existing local SmsLog records (currently written by the admin SMS flow) instead of querying Twilio. No historical remote messages are imported.
+All active SMS sending uses KudiSMS. SmsService delegates verification, welcome, donation-confirmation and password-reset messages to KudiSmsService; API/admin sending uses the same provider. Ozeki configuration and runtime includes are removed. The unused bundled Ozeki files and Twilio SDK dependency have been removed. SMS history reads existing local SmsLog records (written by admin and API SMS flows) instead of querying Twilio. No historical remote messages are imported.
 
 Keep KUDI_SMS_KEY and KUDI_SMS_URL in the environment; optional KUDI_SMS_SENDER_ID defaults to ABU and must be approved in Kudi. Existing /api/intcomposesms configuration is preserved and now sends country_id=234; /api/sms sends gateway=2. Requests use HTTPS POST form data, strict success/error-code validation and bounded timeouts without automatic retries. Acceptance does not guarantee handset delivery. Tokens, OTP contents and raw provider errors are not logged/returned. Existing verification response keys and locally generated OTP checks are retained. sms:test sends only to the explicitly supplied phone; its configuration check no longer sends a billable dummy SMS. No .env or mobile settings were modified.
 
 Official contract: https://www.kudisms.net/docs/sms/ and https://www.kudisms.net/docs/authentication/. Five mocked Kudi regression tests verify OTP routing, existing message helpers, missing configuration, sanitized failures and both endpoint formats. No real SMS was sent. Clear/rebuild configuration cache on deployment; no new migration is required.
+
+Follow-up verification: eight Kudi tests now cover admin/API sending, local history and the single-send CLI test in addition to the provider tests. Composer dependency removal is limited to twilio/sdk. A user-authorized live SMS was attempted; Kudi returned HTTP 200 with a non-success payload and the message was not accepted. A subsequent read-only sender-status check returned provider code 300. Live delivery is not confirmed; verify the configured endpoint, key and approved sender against the merchant dashboard before deployment. No further live sends were performed.
