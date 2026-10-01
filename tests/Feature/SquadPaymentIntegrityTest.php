@@ -606,4 +606,24 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertNull($this->donation->donor->fresh()->phone);
         $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => 'donor@example.test', 'phone' => 'invalid'])->assertStatus(422);
     }
+
+    public function test_tier_email_replaces_legacy_date_with_recorded_payment_date(): void
+    {
+        foreach (['2025_12_24_164200_create_email_templates_table.php', '2025_12_24_164200_create_email_logs_table.php',
+            '2026_05_13_165522_create_donor_tiers_table.php', '2026_05_13_171803_add_donor_tier_id_to_email_templates_table.php'] as $migration) {
+            (require database_path('migrations/'.$migration))->up();
+        }
+        $tier = \App\Models\DonorTier::create(['name' => 'General Supporter', 'min_amount' => 0, 'is_active' => true, 'sort_order' => 1]);
+        \App\Models\EmailTemplate::create(['name' => 'Receipt', 'slug' => 'receipt', 'donor_tier_id' => $tier->id,
+            'is_active' => true, 'subject' => 'Donation {{created_at}}',
+            'body_html' => 'Date: {{created_at}} / {{ created_at }} / [created_at] / {{donation_date}}']);
+        $this->donation->forceFill(['status' => 'completed', 'created_at' => '2026-09-20 09:00:00',
+            'paid_at' => '2026-09-22 10:00:00', 'verified_at' => '2026-09-23 10:00:00'])->save();
+        Mail::shouldReceive('html')->once()->with('Date: 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026 / 22 Sep 2026', \Mockery::type('callable'));
+        $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
+        $this->assertSame('sent', \App\Models\EmailLog::firstOrFail()->status);
+        $this->donation->forceFill(['paid_at' => null, 'verified_at' => null])->save();
+        Mail::shouldReceive('html')->once()->with('Date: 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026 / 20 Sep 2026', \Mockery::type('callable'));
+        $this->assertTrue((new TierNotificationService)->handleDonationTierCheck($this->donation->fresh()));
+    }
 }

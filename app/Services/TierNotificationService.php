@@ -74,6 +74,8 @@ class TierNotificationService
 
         $logoUrl = 'https://abu-endowment.cloud/abu_logo_white_for_email.png';
 
+        $receiptDate = ($donation->paid_at ?? $donation->verified_at ?? $donation->created_at)?->format('d M Y') ?? '';
+
         $variables = [
             'donor_name'        => $donorName,
             'donor_email'       => $donor->email,
@@ -81,7 +83,8 @@ class TierNotificationService
             'total_amount'      => '₦' . number_format($total, 2),
             'amount'            => '₦' . number_format((float) $donation->amount, 2),
             'reference'         => $donation->payment_reference ?? '',
-            'donation_date'     => now()->format('d M Y'),
+            'donation_date'     => $receiptDate,
+            'created_at'        => $receiptDate,
             'project_name'      => $donation->project?->project_title ?? 'GIVE ABU',
             'organization_name' => $donor->organization_name ?? 'GIVE ABU',
             'logo_url'          => $logoUrl,
