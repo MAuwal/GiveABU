@@ -63,6 +63,7 @@ class LoginModal extends Component
 
             // Store token in session for Livewire persistence
             if (isset($data['token'])) {
+                Session::regenerate();
                 Session::put('donor_token', $data['token']);
             }
 
@@ -79,7 +80,8 @@ class LoginModal extends Component
 
     public function saveAuthToken($token)
     {
-        if ($token) {
+        if (app(\App\Services\DonorTokenService::class)->resolve($token)) {
+            Session::regenerate();
             Session::put('donor_token', $token);
             $this->close();
             $this->dispatch('login-success');

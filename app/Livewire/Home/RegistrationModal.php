@@ -100,7 +100,7 @@ class RegistrationModal extends Component
             'state' => 'required|string',
             'lga' => 'required|string',
             'nationality' => 'required|string',
-            'password' => 'required|string|min:6',
+            'password' => 'required|string|min:8',
             'passwordConfirm' => 'required|string|same:password',
         ]);
 
@@ -113,6 +113,7 @@ class RegistrationModal extends Component
         try {
             // Step 1: Create donor
             $donorData = [
+                'password' => $this->password,
                 'surname' => $this->surname,
                 'name' => $this->name,
                 'other_name' => $this->otherName ?: null,
@@ -135,8 +136,9 @@ class RegistrationModal extends Component
 
             $donorRequest = Request::create('/api/donors', 'POST', $donorData);
             $donorRequest->headers->set('X-Requested-With', 'XMLHttpRequest');
+            $donorRequest->attributes->set('web_registration', true);
 
-            $donorController = app(\App\Http\Controllers\DonorController::class);
+            $donorController = app(\App\Http\Controllers\Api\DonorsController::class);
             $donorResponse = $donorController->store($donorRequest);
             $donorResult = json_decode($donorResponse->getContent(), true);
 
@@ -150,30 +152,10 @@ class RegistrationModal extends Component
                 throw new \Exception($donorResult['message'] ?? 'Registration failed. Please check the highlighted fields.');
             }
 
-            // Step 2: Create donor session (email is the username)
-            $sessionRequest = Request::create('/api/donor-sessions/register', 'POST', [
-                'username' => $this->email,
-                'password' => $this->password,
-                'donor_id' => $donorResult['data']['donor']['id'] ?? $donorResult['data']['id'],
-            ]);
-            $sessionRequest->headers->set('X-Requested-With', 'XMLHttpRequest');
-
-            $sessionController = app(\App\Http\Controllers\Api\DonorSessionController::class);
-            $sessionResponse = $sessionController->register($sessionRequest);
-            $sessionResult = json_decode($sessionResponse->getContent(), true);
-
-            if (!$sessionResponse->isSuccessful()) {
-                throw new \Exception($sessionResult['message'] ?? 'Failed to create session');
-            }
-
-            // Store session ID as the donor token (register returns id, login returns token)
-            $token = $sessionResult['token'] ?? $sessionResult['data']['id'] ?? null;
-            if ($token) {
-                Session::put('donor_token', $token);
-            }
-
-            // Store session ID for later use (resend / skip)
-            $this->registeredSessionId = $sessionResult['data']['id'];
+            $token = $donorResult['data']['session_token'];
+            Session::regenerate();
+            Session::put('donor_token', $token);
+            $this->registeredSessionId = $donorResult['data']['session_id'];
 
             // Auto-login: session already set above, notify header immediately
             $this->dispatch('registration-success');
@@ -221,6 +203,11 @@ class RegistrationModal extends Component
     private function dispatchVerificationEmail(int $sessionId, string $email, string $name): void
     {
         try {
+            $session = app(\App\Services\DonorTokenService::class)->resolve(Session::get('donor_token'));
+            if (!$session || (int) $session->id !== $sessionId) {
+                return;
+            }
+            $email = $session->username;
             $token = Str::random(64);
             DonorSession::where('id', $sessionId)->update(['email_verification_token' => $token]);
 
@@ -234,13 +221,14 @@ class RegistrationModal extends Component
                 'error'      => $e->getMessage(),
             ]);
             // Surface mail error so user knows and can retry later
-            $this->error = 'Could not send verification email: ' . $e->getMessage();
+            $this->error = 'Could not send verification email. Please try again later.';
         }
     }
 
     public function saveAuthToken($token)
     {
-        if ($token) {
+        if (app(\App\Services\DonorTokenService::class)->resolve($token)) {
+            Session::regenerate();
             Session::put('donor_token', $token);
             $this->close();
             $this->dispatch('login-success');

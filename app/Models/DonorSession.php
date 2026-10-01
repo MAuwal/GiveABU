@@ -28,6 +28,7 @@ class DonorSession extends Model
 
     protected $hidden = [
         'password',
+        'email_verification_token',
     ];
 
     protected $casts = [

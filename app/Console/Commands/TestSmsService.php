@@ -2,8 +2,8 @@
 
 namespace App\Console\Commands;
 
-use Illuminate\Console\Command;
 use App\Services\SmsService;
+use Illuminate\Console\Command;
 
 class TestSmsService extends Command
 {
@@ -19,7 +19,7 @@ class TestSmsService extends Command
      *
      * @var string
      */
-    protected $description = 'Test the SMS service with Ozeki SMS Gateway';
+    protected $description = 'Test the SMS service with KudiSMS';
 
     /**
      * Execute the console command.
@@ -27,38 +27,40 @@ class TestSmsService extends Command
     public function handle(SmsService $smsService)
     {
         $phone = $this->argument('phone');
-        
-        $this->info("Testing SMS service...");
+
+        $this->info('Testing SMS service...');
         $this->info("Sending test SMS to: {$phone}");
-        
-        // Test connection first
+
+        // Check configuration first
         $connectionTest = $smsService->testConnection();
-        
-        if (!$connectionTest['success']) {
-            $this->error("SMS service connection failed:");
+
+        if (! $connectionTest['success']) {
+            $this->error('KudiSMS configuration missing:');
             $this->error($connectionTest['error']);
+
             return 1;
         }
-        
-        $this->info("✓ SMS service connection successful");
-        
+
+        $this->info('✓ KudiSMS configuration present');
+
         // Send test SMS
-        $result = $smsService->sendSms($phone, "Test SMS from ABU Endowment - " . now()->format('Y-m-d H:i:s'), [
+        $result = $smsService->sendSms($phone, 'Test SMS from ABU Endowment - '.now()->format('Y-m-d H:i:s'), [
             'tag' => 'test',
             'submit_report' => true,
-            'delivery_report' => true
+            'delivery_report' => true,
         ]);
-        
+
         if ($result['success']) {
-            $this->info("✓ SMS sent successfully!");
-            $this->info("Message ID: " . $result['message_id']);
-            $this->info("Status: " . $result['status']);
+            $this->info('✓ SMS sent successfully!');
+            $this->info('Message ID: '.$result['message_id']);
+            $this->info('Status: '.$result['status']);
         } else {
-            $this->error("✗ SMS sending failed:");
+            $this->error('✗ SMS sending failed:');
             $this->error($result['error']);
+
             return 1;
         }
-        
+
         return 0;
     }
-} 
+}

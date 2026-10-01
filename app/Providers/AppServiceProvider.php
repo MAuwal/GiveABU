@@ -15,6 +15,8 @@ class AppServiceProvider extends ServiceProvider
             return config('app.frontend_url')."/password-reset/$token?email={$notifiable->getEmailForPasswordReset()}";
         });
 
+        \Livewire\Livewire::addPersistentMiddleware([\App\Http\Middleware\RequireRole::class]);
+
         \App\Models\Donor::observe(\App\Observers\DonorObserver::class);
 
         $this->ensureStorageDirectories();

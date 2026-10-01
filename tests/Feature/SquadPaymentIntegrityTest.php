@@ -37,6 +37,7 @@ class SquadPaymentIntegrityTest extends TestCase
         Schema::create('donors', function (Blueprint $table) {
             $table->id();
             $table->string('email')->unique();
+            $table->string('phone')->nullable();
             $table->string('surname');
             $table->string('name');
             $table->string('donor_type');
@@ -63,6 +64,7 @@ class SquadPaymentIntegrityTest extends TestCase
             '2026_05_08_130000_create_payment_transactions_table.php',
             '2026_05_08_175917_add_category_to_payment_transactions_table.php',
             '2026_10_01_000001_harden_donation_payment_schema.php',
+            '2026_10_01_000003_add_receipt_phone_to_donations.php',
         ] as $migration) {
             (require database_path('migrations/'.$migration))->up();
         }
@@ -524,5 +526,84 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertFalse(PaymentTransaction::where('payment_gateway', 'squad')->exists());
         app(SquadPaymentService::class)->event($this->donation, 'payment.initialized');
         $this->artisan('payments:preflight')->expectsOutput('Pending Squad-style references without Squad binding: 0')->assertSuccessful();
+    }
+
+    public function test_new_reference_format_for_both_gateways_and_collision_retry(): void
+    {
+        $service = app(\App\Services\PaymentReferenceService::class);
+        foreach (['squad', 'interswitch'] as $gateway) {
+            $this->assertMatchesRegularExpression('/^ABU_ZARIA_'.strtoupper($gateway).'_'.now()->year.'_[a-f0-9]{8}$/', $service->generate($gateway));
+        }
+        $mock = $this->partialMock(\App\Services\PaymentReferenceService::class);
+        $mock->shouldReceive('generate')->with('squad')->once()->andReturn($this->reference);
+        $mock->shouldReceive('generate')->with('squad')->once()->andReturn('ABU_ZARIA_SQUAD_'.now()->year.'_1234abcd');
+        $new = $mock->create(['donor_id' => $this->donation->donor_id, 'amount' => '123.45', 'type' => 'endowment',
+            'frequency' => 'onetime', 'endowment' => 'yes', 'status' => 'pending'], 'squad');
+        $this->assertSame('ABU_ZARIA_SQUAD_'.now()->year.'_1234abcd', $new->payment_reference);
+        $this->assertSame(2, Donation::count());
+    }
+
+    public function test_successful_squad_sends_one_kudi_sms_even_when_email_fails(): void
+    {
+        $this->donation->donor->update(['phone' => '08012345678']);
+        config(['services.kudi.token' => 'test-key', 'services.kudi.url' => 'https://kudi.test/api/intcomposesms']);
+        $this->gateway();
+        Http::fake(['https://kudi.test/*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
+        Mail::shouldReceive('send')->once()->andThrow(new \RuntimeException('Mail unavailable'));
+        $this->getJson('/api/squad/verify/'.$this->reference)->assertOk()->assertJsonPath('success', true);
+        $this->getJson('/api/squad/verify/'.$this->reference)->assertOk();
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'sms.accepted')->count());
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/') && $r['recipients'] === '2348012345678' && str_contains($r['message'], '123.45'));
+        $this->assertCount(1, Http::recorded(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/')));
+    }
+
+    public function test_interswitch_sms_failure_cannot_reverse_payment_or_resend(): void
+    {
+        $this->donation->donor->update(['phone' => '08012345678']);
+        config(['services.kudi.token' => 'test-key', 'services.kudi.url' => 'https://kudi.test/api/intcomposesms']);
+        $this->interswitchGateway(['ResponseCode' => '00', 'Amount' => 12345]);
+        Http::fake(['https://kudi.test/*' => Http::response(['status' => 'error', 'error_code' => '100'])]);
+        $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk()->assertJsonPath('success', true);
+        $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk();
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        $this->assertSame(1, PaymentTransaction::where('event_type', 'sms.failed')->count());
+        $this->assertCount(1, Http::recorded(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/')));
+    }
+
+    public function test_uncompleted_payment_never_sends_sms(): void
+    {
+        $this->donation->donor->update(['phone' => '08012345678']);
+        $this->gateway(['transaction_amount' => 1]);
+        $this->getJson('/api/squad/verify/'.$this->reference)->assertStatus(422);
+        app(\App\Services\PaymentSmsService::class)->send($this->donation, 'squad');
+        $this->assertFalse(PaymentTransaction::where('event_type', 'sms.claimed')->exists());
+        Http::assertSentCount(1);
+    }
+
+    public function test_receipt_uses_submitted_phone_and_exact_requested_sms_format(): void
+    {
+        $this->donation->donor->update(['phone' => '08011111111']);
+        $this->reference = 'ABU_ZARIA_SQUAD_2026_e29b41d4';
+        $this->donation->update(['receipt_phone' => '08012345678', 'amount' => '123456.00', 'payment_reference' => $this->reference]);
+        $this->donation->transactions()->update(['payment_reference' => $this->reference]);
+        config(['services.kudi.token' => 'test-key', 'services.kudi.url' => 'https://kudi.test/api/intcomposesms']);
+        $this->gateway(['transaction_amount' => 12345600]);
+        Http::fake(['https://kudi.test/*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
+        $this->getJson('/api/squad/verify/'.$this->reference)->assertOk();
+        $expected = "Thank you for your generous donation to ABU Zaria. Your payment of ₦123,456.00 has been received successfully.\n\nPayment Reference: ".$this->reference;
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://kudi.test/') && $r['recipients'] === '2348012345678' && $r['message'] === $expected);
+        $this->assertSame('08011111111', $this->donation->donor->fresh()->phone);
+        $this->assertArrayNotHasKey('receipt_phone', $this->donation->fresh()->toArray());
+    }
+
+    public function test_squad_initiation_preserves_receipt_phone_without_changing_existing_donor(): void
+    {
+        Http::fake(['https://squad.test/*' => Http::response(['success' => true, 'data' => ['checkout_url' => 'https://checkout.squad.test/payment']])]);
+        $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => $this->donation->donor->email, 'phone' => '08012345678'])->assertOk();
+        $new = Donation::latest('id')->first();
+        $this->assertSame('08012345678', $new->receipt_phone);
+        $this->assertNull($this->donation->donor->fresh()->phone);
+        $this->postJson('/api/squad/pay', ['amount' => '123.45', 'email' => 'donor@example.test', 'phone' => 'invalid'])->assertStatus(422);
     }
 }

@@ -58,7 +58,7 @@ class PaymentController extends Controller
                 'metadata.name' => 'required|string',
                 'metadata.surname' => 'required|string',
                 'metadata.other_name' => 'nullable|string',
-                'metadata.phone' => 'nullable|string', // Phone is now optional
+                'metadata.phone' => ['nullable', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
                 'metadata.donor_id' => 'nullable|exists:donors,id', // Authenticated user's donor_id
                 'metadata.endowment' => 'required|in:yes,no',
                 'metadata.type' => 'nullable|in:endowment,project',
@@ -96,6 +96,7 @@ class PaymentController extends Controller
 
             // 1. Create donation record first (store naira)
             $donation = Donation::create([
+                'receipt_phone' => $metadata['phone'] ?? null,
                 'donor_id' => $donor->id,
                 'project_id' => $metadata['project_id'] ?? null,
                 'amount' => $amountNaira,
@@ -373,6 +374,7 @@ class PaymentController extends Controller
                         $this->updateProjectRaised($donation->project_id, $donation->id);
                     }
 
+                    app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
                     $this->sendThankYouEmail($donation);
                     (new TierNotificationService())->handleDonationTierCheck($donation);
                 } elseif ($donation) {
@@ -578,6 +580,7 @@ class PaymentController extends Controller
         }
 
         // Send thank you email and tier notification
+        app(\App\Services\PaymentSmsService::class)->send($donation, 'paystack');
         $this->sendThankYouEmail($donation);
         (new TierNotificationService())->handleDonationTierCheck($donation);
 

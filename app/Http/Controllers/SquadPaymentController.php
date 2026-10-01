@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Donation;
 use App\Models\Donor;
 use App\Services\PaymentAmount;
 use App\Services\SquadPaymentService;
@@ -10,7 +9,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class SquadPaymentController extends Controller
@@ -21,6 +19,7 @@ class SquadPaymentController extends Controller
     {
         $request->validate([
             'amount' => ['required', 'numeric', 'min:100', 'regex:/\A\d{1,13}(?:\.\d{1,2})?\z/'],
+            'phone' => ['nullable', 'string', 'max:30', 'regex:/\A\+?[0-9 ()-]{7,30}\z/'],
             'email' => 'required|email|max:255',
             'customer_name' => 'nullable|string|max:255',
             'name' => 'nullable|string|max:255',
@@ -48,12 +47,12 @@ class SquadPaymentController extends Controller
             'name' => $name ?: 'Anonymous', 'surname' => '', 'donor_type' => 'addressable_alumni',
         ]);
         $donation = DB::transaction(function () use ($request, $donor, $amount) {
-            $donation = Donation::create([
+            $donation = app(\App\Services\PaymentReferenceService::class)->create([
+                'receipt_phone' => $request->input('phone'),
                 'donor_id' => $donor->id, 'project_id' => $request->input('project_id'), 'amount' => $amount,
                 'type' => $request->filled('project_id') ? 'project' : 'endowment', 'frequency' => 'onetime',
                 'endowment' => $request->filled('project_id') ? 'no' : 'yes', 'status' => 'pending',
-                'payment_reference' => 'ABU_ZARIA_SQUAD_'.Str::uuid(),
-            ]);
+            ], 'squad');
             $this->payments->event($donation, 'payment.initialized', [], 'initialized');
 
             return $donation;

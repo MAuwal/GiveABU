@@ -12,76 +12,49 @@ class KudiSmsService
         $token = config('services.kudi.token');
         $url = config('services.kudi.url');
 
-        if (!$token || !$url) {
-            Log::error('KudiSMS configuration missing', [
-                'token' => $token,
-                'url' => $url,
-            ]);
+        if (! $token || ! $url || ! str_starts_with($url, 'https://')) {
+            Log::warning('KudiSMS configuration missing or insecure');
 
-            return [
-                'success' => false,
-                'error' => 'KudiSMS is not configured. Please set KUDI_SMS_KEY and KUDI_SMS_URL.',
-            ];
+            return $this->failure('KudiSMS is not configured. Please set KUDI_SMS_KEY and an HTTPS KUDI_SMS_URL.');
         }
-
         $recipients = $this->normalizeRecipient($recipient, $defaultCountryId);
-
-        try {
-            $response = Http::get($url, [
-                'token' => $token,
-                'senderID' => $senderId,
-                'recipients' => $recipients,
-                'message' => $message,
-                'gateway' => 2,
-            ]);
-
-            if ($response->failed()) {
-                Log::error('KudiSMS request failed', [
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                ]);
-
-                return [
-                    'success' => false,
-                    'error' => 'Failed to send SMS: ' . $response->body(),
-                    'response' => $response->body(),
-                ];
-            }
-
-            $payload = $response->json();
-            $status = $payload['status'] ?? null;
-            $errorCode = $payload['error_code'] ?? null;
-            $messageText = $payload['msg'] ?? $payload['message'] ?? $response->body();
-
-            if (strtolower($status) === 'success' && $errorCode === '000') {
-                return [
-                    'success' => true,
-                    'message' => $messageText,
-                    'response' => $payload,
-                ];
-            }
-
-            Log::warning('KudiSMS returned non-success response', [
-                'payload' => $payload,
-            ]);
-
-            return [
-                'success' => false,
-                'error' => 'KudiSMS error: ' . $messageText,
-                'response' => $payload,
-            ];
-        } catch (\Exception $e) {
-            Log::error('KudiSMS send exception', [
-                'error' => $e->getMessage(),
-                'recipient' => $recipient,
-                'message' => $message,
-            ]);
-
-            return [
-                'success' => false,
-                'error' => $e->getMessage(),
-            ];
+        if ($recipients === '') {
+            return $this->failure('Please enter a valid recipient phone number.');
         }
+        $fields = ['token' => $token, 'senderID' => $senderId, 'recipients' => $recipients, 'message' => $message];
+        $fields['gateway'] = 2;
+        try {
+            // Preserve the existing merchant integration's GET contract.
+            // Never log query URLs, tokens or message contents, or retry a send.
+            $response = Http::acceptJson()->connectTimeout(5)->timeout(15)->get($url, $fields);
+            $payload = $response->json();
+            if (! $response->successful() || ! is_array($payload)
+                || strtolower((string) ($payload['status'] ?? '')) !== 'success'
+                || (string) ($payload['error_code'] ?? '') !== '000') {
+                $providerCode = (string) ($payload['error_code'] ?? '');
+                $providerCode = preg_match('/\A[0-9]{3}\z/', $providerCode) ? $providerCode : null;
+                Log::warning('KudiSMS send rejected', ['http_status' => $response->status(), 'provider_code' => $providerCode]);
+
+                return $this->failure('KudiSMS could not accept this message.'.($providerCode ? ' Provider code: '.$providerCode : ''));
+            }
+            // Retain only delivery/accounting fields; provider responses may echo secrets.
+            $safe = array_intersect_key($payload, array_flip(['status', 'error_code', 'cost', 'data']));
+            $data = $safe['data'] ?? null;
+            $first = is_array($data) ? ($data[0] ?? null) : $data;
+            $messageId = is_string($first) && str_contains($first, '|') ? explode('|', $first, 2)[1] : null;
+
+            return ['success' => true, 'message' => 'Message accepted by KudiSMS', 'response' => $safe,
+                'message_id' => $messageId, 'status' => 'accepted', 'to' => $recipients];
+        } catch (\Throwable $e) {
+            Log::warning('KudiSMS send unavailable', ['exception' => get_class($e)]);
+
+            return $this->failure('SMS delivery is temporarily unavailable.');
+        }
+    }
+
+    private function failure(string $error): array
+    {
+        return ['success' => false, 'error' => $error, 'response' => null, 'message_id' => null, 'status' => 'unavailable'];
     }
 
     private function normalizeRecipient(string $recipient, string $defaultCountryId): string
@@ -100,8 +73,8 @@ class KudiSmsService
                 $digits = ltrim($digits, '0');
             }
 
-            if (!str_starts_with($digits, $defaultCountryId) && strlen($digits) <= 10) {
-                $digits = $defaultCountryId . $digits;
+            if (! str_starts_with($digits, $defaultCountryId) && strlen($digits) <= 10) {
+                $digits = $defaultCountryId.$digits;
             }
 
             $normalized[] = $digits;

@@ -1,6 +1,15 @@
 <?php
 
 return [
+    'security' => [
+        'seed_passwords' => [
+            'admin' => env('SEED_ADMIN_PASSWORD'),
+            'finance' => env('SEED_FINANCE_PASSWORD'),
+            'executive' => env('SEED_EXECUTIVE_PASSWORD'),
+        ],
+        'frontend_url' => env('FRONTEND_URL', env('APP_URL')),
+        'reset_callback_urls' => array_filter(array_map('trim', explode(',', env('RESET_CALLBACK_URLS', '')))),
+    ],
 
     /*
     |--------------------------------------------------------------------------
@@ -42,17 +51,10 @@ return [
         ],
     ],
 
-    // Ozeki SMS Gateway Configuration
-    'ozeki' => [
-        'username' => env('OZEKI_USERNAME'),
-        'password' => env('OZEKI_PASSWORD'),
-        'api_url' => env('OZEKI_API_URL', 'http://127.0.0.1:9509/api?action=rest'),
-        'enabled' => env('SMS_VERIFICATION_ENABLED', true),
-    ],
-
     'kudi' => [
         'token' => env('KUDI_SMS_KEY'),
         'url' => env('KUDI_SMS_URL', 'https://my.kudisms.net/api/intcomposesms'),
+        'sender_id' => env('KUDI_SMS_SENDER_ID', 'ABU'),
     ],
 
     // Squad Payment Configuration

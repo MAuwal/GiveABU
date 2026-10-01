@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Donation extends Model
 {
     protected $fillable = [
+        'receipt_phone',
         'donor_id',
         'project_id',
         'amount',
@@ -18,6 +19,8 @@ class Donation extends Model
         'paid_at',
         'verified_at',
     ];
+
+    protected $hidden = ['receipt_phone'];
 
     protected $casts = [
         'amount' => 'decimal:2',
