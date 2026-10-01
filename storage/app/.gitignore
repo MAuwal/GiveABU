@@ -1,0 +1,6 @@
+*
+!private/
+!public/
+!livewire-tmp/
+!livewire-tmp/.gitkeep
+!.gitignore
