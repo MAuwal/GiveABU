@@ -918,72 +918,14 @@ class PaymentController extends Controller
      */
     protected function updateProjectRaised($projectId, $donationId = null)
     {
+        if (!$projectId) {
+            return false;
+        }
         try {
-            // Find project (including soft-deleted check)
-            $project = Project::find($projectId);
-            
-            if (!$project) {
-                Log::warning('Cannot update project raised: Project not found', [
-                    'project_id' => $projectId,
-                    'donation_id' => $donationId
-                ]);
-                return false;
-            }
-
-            // Check if project is soft-deleted
-            if ($project->trashed()) {
-                Log::warning('Cannot update project raised: Project is soft-deleted', [
-                    'project_id' => $projectId,
-                    'project_title' => $project->project_title,
-                    'donation_id' => $donationId
-                ]);
-                return false;
-            }
-
-            // Store old raised amount for logging
-            $oldRaised = $project->raised ?? 0;
-
-            // Calculate total raised from all completed donations for this project
-            // Using database transaction to ensure consistency
-            $totalRaised = DB::transaction(function () use ($projectId) {
-                return Donation::where('project_id', $projectId)
-                    ->where('status', 'completed')
-                    ->lockForUpdate() // Prevent race conditions with concurrent payments
-                    ->sum('amount');
-            });
-
-            // Ensure totalRaised is numeric (handle null case)
-            $totalRaised = $totalRaised ?? 0;
-
-            // Update project raised column within transaction
-            DB::transaction(function () use ($project, $totalRaised) {
-                $project->update(['raised' => $totalRaised]);
-            });
-
-            Log::info('Project raised amount updated successfully', [
-                'project_id' => $projectId,
-                'project_title' => $project->project_title,
-                'old_raised' => $oldRaised,
-                'new_raised' => $totalRaised,
-                'difference' => $totalRaised - $oldRaised,
-                'donation_id' => $donationId
-            ]);
-
+            app(\App\Services\ProjectFundingService::class)->rebuild((int) $projectId);
             return true;
-
-        } catch (\Exception $e) {
-            // Log error but don't throw - allow payment processing to continue
-            Log::error('Failed to update project raised amount', [
-                'project_id' => $projectId,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'donation_id' => $donationId
-            ]);
-
-            // Return false to indicate failure, but don't throw exception
-            // This ensures payment processing continues even if project update fails
+        } catch (\Throwable $e) {
+            Log::error('Project total reconciliation failed', ['project_id' => $projectId, 'exception' => get_class($e)]);
             return false;
         }
     }

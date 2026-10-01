@@ -6,7 +6,6 @@ use App\Http\Controllers\InterswitchPaymentController;
 use App\Models\Donation;
 use App\Models\Donor;
 use App\Models\PaymentTransaction;
-use App\Services\SquadService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -94,7 +93,6 @@ class PaymentTransactions extends Component
             return;
         }
 
-        $squadService          = new SquadService();
         $interswitchController = app(InterswitchPaymentController::class);
 
         foreach ($records as $transaction) {
@@ -112,7 +110,7 @@ class PaymentTransactions extends Component
             }
 
             if ($transaction->payment_gateway === 'squad') {
-                $this->syncSquadTransactionFromGateway($transaction, $squadService);
+                $this->syncSquadTransactionFromGateway($transaction);
             }
         }
     }
@@ -120,72 +118,10 @@ class PaymentTransactions extends Component
     /**
      * Call Squad's verify API for a single transaction and sync the local record.
      */
-    private function syncSquadTransactionFromGateway(PaymentTransaction $transaction, SquadService $squadService): void
+    private function syncSquadTransactionFromGateway(PaymentTransaction $transaction): void
     {
-        $reference = $transaction->gateway_reference ?: $transaction->payment_reference;
-        if (!$reference) {
-            return;
-        }
-
-        try {
-            $result = $squadService->verifyTransaction($reference);
-            if (!$result['success'] || empty($result['data'])) {
-                return;
-            }
-
-            $data      = $result['data'];
-            $status    = strtolower((string) ($data['transaction_status'] ?? $data['status'] ?? 'unknown'));
-            $verifyRef = $data['transaction_ref'] ?? $reference;
-            $donation  = Donation::find($transaction->donation_id);
-
-            if (!$donation) {
-                return;
-            }
-
-            if ($status === 'success') {
-                if ($donation->status !== 'completed') {
-                    $donation->update([
-                        'status'      => 'completed',
-                        'verified_at' => now(),
-                        'paid_at'     => $data['transaction_date'] ?? now(),
-                    ]);
-                }
-
-                $transaction->update([
-                    'status'           => 'completed',
-                    'gateway_status'   => 'success',
-                    'gateway_reference'=> $verifyRef,
-                    'response_payload' => json_encode($result['raw'] ?? $data),
-                ]);
-                return;
-            }
-
-            if (in_array($status, ['failed', 'declined'], true)) {
-                if ($donation->status !== 'failed') {
-                    $donation->update(['status' => 'failed']);
-                }
-
-                $transaction->update([
-                    'status'           => 'failed',
-                    'gateway_status'   => $status,
-                    'gateway_reference'=> $verifyRef,
-                    'response_payload' => json_encode($result['raw'] ?? $data),
-                ]);
-                return;
-            }
-
-            $transaction->update([
-                'status'           => 'pending',
-                'gateway_status'   => $status,
-                'gateway_reference'=> $verifyRef,
-                'response_payload' => json_encode($result['raw'] ?? $data),
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning('Auto-verify Squad failed on admin transactions page load', [
-                'transaction_id'    => $transaction->id,
-                'payment_reference' => $transaction->payment_reference,
-                'error'             => $e->getMessage(),
-            ]);
+        if ($transaction->payment_reference) {
+            app(\App\Services\SquadPaymentService::class)->verify($transaction->payment_reference);
         }
     }
 
@@ -324,106 +260,11 @@ class PaymentTransactions extends Component
      */
     public function verifyPendingSquadTransactions(int $limit = 50): void
     {
-        $squadService = new SquadService();
-
-        $pendingTransactions = PaymentTransaction::where('payment_gateway', 'squad')
-            ->whereIn('status', ['pending', 'failed'])
-            ->orderByDesc('id')
-            ->limit(max(1, $limit))
-            ->get();
-
-        foreach ($pendingTransactions as $transaction) {
-            $reference = $transaction->gateway_reference ?: $transaction->payment_reference;
-            if (!$reference) {
-                continue;
-            }
-
-            $result = $squadService->verifyTransaction($reference);
-            if (!$result['success'] || empty($result['data'])) {
-                continue;
-            }
-
-            $data      = $result['data'];
-            $status    = strtolower($data['transaction_status'] ?? $data['status'] ?? 'unknown');
-            $verifyRef = $data['transaction_ref'] ?? $reference;
-            $donation  = Donation::find($transaction->donation_id);
-
-            if (!$donation) {
-                continue;
-            }
-
-            if ($status === 'success') {
-                if ($donation->status !== 'completed') {
-                    $donation->update([
-                        'status'      => 'completed',
-                        'verified_at' => now(),
-                        'paid_at'     => $data['transaction_date'] ?? now(),
-                    ]);
-                }
-
-                $transaction->update([
-                    'status'            => 'completed',
-                    'gateway_status'    => 'success',
-                    'gateway_reference' => $verifyRef,
-                    'response_payload'  => json_encode($result['raw'] ?? $data),
-                ]);
-
-                if (!PaymentTransaction::where('payment_reference', $transaction->payment_reference)
-                    ->where('event_type', 'charge.success')
-                    ->exists()) {
-                    PaymentTransaction::create([
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'payment_gateway'   => 'squad',
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.success',
-                        'payment_reference' => $transaction->payment_reference,
-                        'gateway_reference' => $verifyRef,
-                        'amount'            => $data['amount'] ?? $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'completed',
-                        'gateway_status'    => $status,
-                        'channel'           => $data['payment_method'] ?? null,
-                        'fee'               => $data['fee'] ?? 0,
-                        'response_payload'  => json_encode($result['raw'] ?? $data),
-                    ]);
-                }
-            }
-
-            if (in_array($status, ['failed', 'declined'])) {
-                if ($donation->status !== 'failed') {
-                    $donation->update(['status' => 'failed']);
-                }
-
-                $transaction->update([
-                    'status'            => 'failed',
-                    'gateway_status'    => $status,
-                    'gateway_reference' => $verifyRef,
-                    'response_payload'  => json_encode($result['raw'] ?? $data),
-                ]);
-
-                if (!PaymentTransaction::where('payment_reference', $transaction->payment_reference)
-                    ->where('event_type', 'charge.failed')
-                    ->exists()) {
-                    PaymentTransaction::create([
-                        'donation_id'       => $donation->id,
-                        'donor_id'          => $donation->donor_id,
-                        'project_id'        => $donation->project_id,
-                        'payment_gateway'   => 'squad',
-                        'category'          => $donation->project_id ? 'project' : 'general',
-                        'event_type'        => 'charge.failed',
-                        'payment_reference' => $transaction->payment_reference,
-                        'gateway_reference' => $verifyRef,
-                        'amount'            => $data['amount'] ?? $donation->amount,
-                        'currency'          => 'NGN',
-                        'status'            => 'failed',
-                        'gateway_status'    => $status,
-                        'channel'           => $data['payment_method'] ?? null,
-                        'fee'               => $data['fee'] ?? 0,
-                        'response_payload'  => json_encode($result['raw'] ?? $data),
-                    ]);
-                }
+        $records = PaymentTransaction::where('payment_gateway', 'squad')->whereIn('status', ['pending', 'failed'])
+            ->orderByDesc('id')->limit(max(1, $limit))->get()->unique('payment_reference');
+        foreach ($records as $record) {
+            if ($record->payment_reference) {
+                app(\App\Services\SquadPaymentService::class)->verify($record->payment_reference);
             }
         }
     }
@@ -516,94 +357,19 @@ class PaymentTransactions extends Component
 
     public function verifySquad($id): void
     {
-        $transaction = PaymentTransaction::find($id);
-
-        if (!$transaction) {
-            $this->setActionMessage('error', 'Transaction not found.');
+        $record = PaymentTransaction::find($id);
+        if (!$record || $record->payment_gateway !== 'squad' || !$record->payment_reference) {
+            $this->setActionMessage('error', 'Squad payment reference not found.');
             return;
         }
-
-        if ($transaction->payment_gateway !== 'squad') {
-            $this->setActionMessage('error', 'Only Squad transactions can be verified here.');
-            return;
-        }
-
-        $reference = $transaction->gateway_reference ?: $transaction->payment_reference;
-        if (!$reference) {
-            $this->setActionMessage('error', 'Missing payment reference for this transaction.');
-            return;
-        }
-
         try {
-            $squadService = new SquadService();
-            $result       = $squadService->verifyTransaction($reference);
-
-            if (!$result['success'] || empty($result['data'])) {
-                $this->setActionMessage('error', 'Unable to verify transaction from Squad gateway.');
-                return;
-            }
-
-            $data      = $result['data'];
-            $status    = strtolower((string) ($data['transaction_status'] ?? $data['status'] ?? 'unknown'));
-            $verifyRef = $data['transaction_ref'] ?? $reference;
-            $donation  = Donation::find($transaction->donation_id);
-
-            if (!$donation) {
-                $this->setActionMessage('error', 'Related donation record not found.');
-                return;
-            }
-
-            if ($status === 'success') {
-                if ($donation->status !== 'completed') {
-                    $donation->update([
-                        'status'      => 'completed',
-                        'verified_at' => now(),
-                        'paid_at'     => $data['transaction_date'] ?? now(),
-                    ]);
-                }
-
-                $transaction->update([
-                    'status'            => 'completed',
-                    'gateway_status'    => 'success',
-                    'gateway_reference' => $verifyRef,
-                    'response_payload'  => json_encode($result['raw'] ?? $data),
-                ]);
-
-                $this->setActionMessage('success', 'Squad verified successfully. Local record has been updated.');
-            } elseif (in_array($status, ['failed', 'declined'], true)) {
-                if ($donation->status !== 'failed') {
-                    $donation->update(['status' => 'failed']);
-                }
-
-                $transaction->update([
-                    'status'            => 'failed',
-                    'gateway_status'    => $status,
-                    'gateway_reference' => $verifyRef,
-                    'response_payload'  => json_encode($result['raw'] ?? $data),
-                ]);
-
-                $this->setActionMessage('error', 'Squad verification returned failed status.');
-            } else {
-                $transaction->update([
-                    'status'            => 'pending',
-                    'gateway_status'    => $status,
-                    'gateway_reference' => $verifyRef,
-                    'response_payload'  => json_encode($result['raw'] ?? $data),
-                ]);
-
-                $this->setActionMessage('warning', 'Squad transaction is still pending confirmation.');
-            }
-
+            $result = app(\App\Services\SquadPaymentService::class)->verify($record->payment_reference);
+            $this->setActionMessage($result['success'] ? 'success' : 'warning', 'Payment confirmation: '.$result['outcome']);
             if ($this->selectedTransaction && (int) $this->selectedTransaction->id === (int) $id) {
-                $this->selectedTransaction = PaymentTransaction::with(['donation.project', 'donor', 'project'])->find($id);
+                $this->selectedTransaction = $record->fresh(['donation.project', 'donor', 'project']);
             }
         } catch (\Throwable $e) {
-            Log::error('Manual Squad verify failed from admin transactions', [
-                'transaction_id'    => $id,
-                'payment_reference' => $reference,
-                'error'             => $e->getMessage(),
-            ]);
-            $this->setActionMessage('error', 'Squad verification failed due to a server error.');
+            $this->setActionMessage('error', 'Payment confirmation is temporarily unavailable.');
         }
     }
 

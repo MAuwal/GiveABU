@@ -12,12 +12,13 @@ use Illuminate\Support\Facades\Mail;
 
 class TierNotificationService
 {
-    public function handleDonationTierCheck(Donation $donation): void
+    /** Returns null when no tier receipt applies, true on delivery, false on failure. */
+    public function handleDonationTierCheck(Donation $donation): ?bool
     {
         try {
             $donor = $donation->donor ?? Donor::find($donation->donor_id);
             if (!$donor || !$donor->email) {
-                return;
+                return null;
             }
 
             // Sum all completed donations including the current one
@@ -32,7 +33,7 @@ class TierNotificationService
                 ->first();
 
             if (!$currentTier) {
-                return;
+                return null;
             }
 
             // Always keep donor tier in sync
@@ -48,18 +49,18 @@ class TierNotificationService
                     'tier_id'   => $currentTier->id,
                     'tier_name' => $currentTier->name,
                 ]);
-                return;
+                return null;
             }
 
-            $this->sendTierEmail($donor, $currentTier, $template, $donation, (float) $total);
+            return $this->sendTierEmail($donor, $currentTier, $template, $donation, (float) $total);
 
         } catch (\Exception $e) {
             Log::error('TierNotificationService error', [
                 'donation_id' => $donation->id,
-                'error'       => $e->getMessage(),
-                'trace'       => $e->getTraceAsString(),
+                'exception' => get_class($e),
             ]);
         }
+        return false;
     }
 
     private function sendTierEmail(
@@ -68,7 +69,7 @@ class TierNotificationService
         EmailTemplate $template,
         Donation $donation,
         float $total
-    ): void {
+    ): bool {
         $donorName = trim("{$donor->surname} {$donor->name}") ?: $donor->email;
 
         $logoUrl = 'https://abu-endowment.cloud/abu_logo_white_for_email.png';
@@ -124,16 +125,18 @@ class TierNotificationService
                 'email'     => $donor->email,
                 'amount'    => $donation->amount,
             ]);
+            return true;
         } catch (\Exception $e) {
             $log->update([
                 'status'        => 'failed',
-                'error_message' => $e->getMessage(),
+                'error_message' => 'Email delivery failed',
             ]);
             Log::error('Failed to send tier donation email', [
                 'donor_id' => $donor->id,
-                'error'    => $e->getMessage(),
+                'exception' => get_class($e),
             ]);
         }
+        return false;
     }
 
     /**

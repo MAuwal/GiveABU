@@ -217,10 +217,9 @@ class ProjectContents extends Component
                             Log::info('Donation updated to completed');
 
                             // Update Project Raised Amount
-                            $totalRaised = Donation::where('project_id', $this->project->id)
-                                                   ->whereIn('status', ['success', 'paid', 'completed', 'Success', 'Paid', 'Completed'])
-                                                   ->sum('amount');
-                            $this->project->update(['raised' => $totalRaised]);
+                            app(\App\Services\ProjectFundingService::class)->rebuild($this->project->id);
+                            $this->project->refresh();
+                            $totalRaised = $this->project->raised;
                             Log::info('Project raised amount updated to: ' . $totalRaised);
                             
                             $this->showModal = false;

@@ -16,6 +16,7 @@ class PaymentTransaction extends Model
         'payment_gateway',
         'category',
         'event_type',
+        'event_key',
         'payment_reference',
         'gateway_reference',
         'amount',

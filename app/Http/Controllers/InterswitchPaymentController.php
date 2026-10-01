@@ -247,7 +247,9 @@ class InterswitchPaymentController extends Controller
                         'response_payload' => json_encode($data),
                     ]);
 
-                    $this->updateProjectRaised($donation->project_id);
+                    if ($donation->project_id) {
+                        app(\App\Services\ProjectFundingService::class)->rebuild($donation->project_id);
+                    }
                     $this->sendThankYouEmail($donation);
                     (new TierNotificationService())->handleDonationTierCheck($donation);
                 }

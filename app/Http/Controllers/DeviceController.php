@@ -156,7 +156,7 @@ class DeviceController extends Controller
             }
 
             $donor = $deviceSession->donor;
-            $totalDonations = $donor->donations()->where('status', 'success')->sum('amount');
+            $totalDonations = $donor->donations()->where('status', 'completed')->sum('amount');
 
             return response()->json([
                 'recognized' => true,
@@ -212,7 +212,7 @@ class DeviceController extends Controller
             }
 
             $donor = $deviceSession->donor;
-            $totalDonations = $donor->donations()->where('status', 'success')->sum('amount');
+            $totalDonations = $donor->donations()->where('status', 'completed')->sum('amount');
 
             return response()->json([
                 'recognized' => true,
