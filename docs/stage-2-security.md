@@ -37,3 +37,11 @@ Rollback means returning to insecure legacy authentication. Prefer fixing forwar
 17 API security tests and 32 payment integrity tests pass (49 tests, 196 assertions), using isolated SQLite schemas and mocked provider calls. All modified PHP files pass php -l; focused new/security files pass Pint; git diff --check passes.
 
 The full suite reports 50 passed, 9 failed (198 assertions). These same nine failures existed before Stage 2: eight auth tests stop in the older 2025_01_15 donor_sessions migration (empty SQLite INSERT caused by migration order), and the homepage example lacks the projects table. Historical migration repair is outside this security change. Real MySQL deployment, browser and mobile end-to-end checks remain deployment requirements.
+
+## KudiSMS provider correction
+
+All active SMS sending uses KudiSMS. SmsService delegates verification, welcome, donation-confirmation and password-reset messages to KudiSmsService; API/admin sending uses the same provider. Ozeki configuration and runtime includes are removed. Existing vendor files remain unused. SMS history reads existing local SmsLog records (currently written by the admin SMS flow) instead of querying Twilio. No historical remote messages are imported.
+
+Keep KUDI_SMS_KEY and KUDI_SMS_URL in the environment; optional KUDI_SMS_SENDER_ID defaults to ABU and must be approved in Kudi. Existing /api/intcomposesms configuration is preserved and now sends country_id=234; /api/sms sends gateway=2. Requests use HTTPS POST form data, strict success/error-code validation and bounded timeouts without automatic retries. Acceptance does not guarantee handset delivery. Tokens, OTP contents and raw provider errors are not logged/returned. Existing verification response keys and locally generated OTP checks are retained. sms:test sends only to the explicitly supplied phone; its configuration check no longer sends a billable dummy SMS. No .env or mobile settings were modified.
+
+Official contract: https://www.kudisms.net/docs/sms/ and https://www.kudisms.net/docs/authentication/. Five mocked Kudi regression tests verify OTP routing, existing message helpers, missing configuration, sanitized failures and both endpoint formats. No real SMS was sent. Clear/rebuild configuration cache on deployment; no new migration is required.
