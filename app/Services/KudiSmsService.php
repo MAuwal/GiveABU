@@ -35,9 +35,11 @@ class KudiSmsService
             if (! $response->successful() || ! is_array($payload)
                 || strtolower((string) ($payload['status'] ?? '')) !== 'success'
                 || (string) ($payload['error_code'] ?? '') !== '000') {
-                Log::warning('KudiSMS send rejected', ['http_status' => $response->status()]);
+                $providerCode = (string) ($payload['error_code'] ?? '');
+                $providerCode = preg_match('/\A[0-9]{3}\z/', $providerCode) ? $providerCode : null;
+                Log::warning('KudiSMS send rejected', ['http_status' => $response->status(), 'provider_code' => $providerCode]);
 
-                return $this->failure('KudiSMS could not accept this message.');
+                return $this->failure('KudiSMS could not accept this message.'.($providerCode ? ' Provider code: '.$providerCode : ''));
             }
             // Retain only delivery/accounting fields; provider responses may echo secrets.
             $safe = array_intersect_key($payload, array_flip(['status', 'error_code', 'cost', 'data']));

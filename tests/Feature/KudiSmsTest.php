@@ -68,4 +68,49 @@ class KudiSmsTest extends TestCase
         $this->assertArrayNotHasKey('token', $result['response']);
         Http::assertSent(fn ($r) => $r['gateway'] === 2 && $r['recipients'] === '2348012345678' && ! $r->hasHeader('Authorization'));
     }
+
+    private function smsHistorySchema(): void
+    {
+        config(['database.default' => 'sqlite', 'database.connections.sqlite.database' => ':memory:']);
+        \Illuminate\Support\Facades\DB::purge('sqlite');
+        (require database_path('migrations/2026_05_08_120000_create_sms_logs_table.php'))->up();
+    }
+
+    public function test_api_sends_with_kudi_and_history_uses_local_records(): void
+    {
+        $this->smsHistorySchema();
+        config(['services.kudi.sender_id' => 'Approved']);
+        Http::fake(['*' => Http::response(['status' => 'success', 'error_code' => '000', 'cost' => '3.50'])]);
+        $controller = app(\App\Http\Controllers\Api\SmsController::class);
+        $request = \Illuminate\Http\Request::create('/api/send-sms', 'POST', ['to' => '08012345678', 'message' => 'Test message']);
+        $response = $controller->sendSms($request);
+        $this->assertTrue($response->getData(true)['success']);
+        $history = $controller->getMessages()->getData(true)['messages'];
+        $this->assertCount(1, $history);
+        $this->assertSame('Approved', $history[0]['from']);
+        $this->assertSame('Test message', $history[0]['body']);
+        Http::assertSent(fn ($r) => $r['senderID'] === 'Approved');
+        Http::assertSentCount(1);
+    }
+
+    public function test_admin_sms_sends_with_kudi_and_records_history(): void
+    {
+        $this->smsHistorySchema();
+        Http::fake(['*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
+        $component = new \App\Livewire\Admin\Notifications\SendSms;
+        $component->receiver = '08012345678';
+        $component->message = 'Admin message';
+        $component->sendSms();
+        $this->assertSame('success', $component->statusType);
+        $this->assertSame(1, \App\Models\SmsLog::count());
+        Http::assertSentCount(1);
+    }
+
+    public function test_sms_test_command_sends_only_one_message_to_requested_phone(): void
+    {
+        Http::fake(['*' => Http::response(['status' => 'success', 'error_code' => '000'])]);
+        $this->artisan('sms:test', ['phone' => '08012345678'])->assertSuccessful();
+        Http::assertSent(fn ($r) => $r['recipients'] === '2348012345678');
+        Http::assertSentCount(1);
+    }
 }

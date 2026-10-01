@@ -27,8 +27,21 @@ class SmsController extends Controller
         $to = $request->input('to');
         $message = $request->input('message');
 
-        $smsService = new KudiSmsService;
+        $smsService = app(KudiSmsService::class);
         $result = $smsService->sendSms($to, $message, config('services.kudi.sender_id', 'ABU'));
+        try {
+            SmsLog::create([
+                'recipient_phone' => $to, 'sender_id' => config('services.kudi.sender_id', 'ABU'),
+                'message' => $message, 'status' => $result['success'] ? 'sent' : 'failed',
+                'error_message' => $result['success'] ? null : ($result['error'] ?? 'SMS unavailable'),
+                'cost' => $result['response']['cost'] ?? null,
+                'response_payload' => json_encode($result['response'] ?? null),
+                'sent_at' => $result['success'] ? now() : null,
+            ]);
+        } catch (\Throwable $e) {
+            // A logging failure must not prompt resending an already accepted SMS.
+            \Illuminate\Support\Facades\Log::warning('SMS history could not be recorded', ['exception' => get_class($e)]);
+        }
 
         if ($result['success']) {
             return response()->json([
