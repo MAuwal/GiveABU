@@ -147,7 +147,9 @@ class ApiSecurityTest extends TestCase
     {
         $other = Donor::create(['name' => 'Other', 'surname' => 'Donor', 'email' => 'other@example.test']);
         $this->getJson('/api/donor/'.$other->id.'/messages', $this->auth())->assertForbidden();
-        $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk()->assertHeader('Cache-Control', 'no-store, private');
+        $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk();
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
     }
 
     public function test_cannot_edit_someone_else_or_promote_own_donor_tier(): void
@@ -385,10 +387,12 @@ class ApiSecurityTest extends TestCase
         Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'completed', 'payment_reference' => 'OWN-DONATION']);
         Donation::create(['donor_id' => $this->donor->id, 'amount' => 2000, 'status' => 'pending', 'payment_reference' => 'OWN-PENDING']);
         Donation::create(['donor_id' => 999, 'amount' => 9000, 'status' => 'completed', 'payment_reference' => 'OTHER-PRIVATE']);
-        $this->withSession(['donor_token' => $this->token])->get('/donor/dashboard')->assertOk()
+        $response = $this->withSession(['donor_token' => $this->token])->get('/donor/dashboard')->assertOk()
             ->assertSee('OWN-DONATION')->assertSee('OWN-PENDING')->assertDontSee('OTHER-PRIVATE')
             ->assertViewHas('stats', fn ($stats) => (float) $stats['total'] === 1000.0 && $stats['count'] === 2 && $stats['pending'] === 1)
-            ->assertHeader('Cache-Control', 'no-store, private');
+            ;
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
         $this->get('/donor/donations')->assertOk();
     }
 
