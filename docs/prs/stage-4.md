@@ -1,0 +1,7 @@
+App nodes now expose a dependency-aware /ready endpoint independently of Laravel's /up liveness check. A node-local draining marker removes a node from readiness during rolling releases. Database/cache failures return a generic 503; optional shared upload disk probes verify read/write/delete capability without returning dependency details.
+
+Trusted load-balancer IPs/CIDRs are environment-configured; forwarded protocol/client IP/port are accepted only from configured proxies. Adds an app-node Nginx template and multi-node deployment, shared-session/storage, worker, rollback and failover acceptance instructions.
+
+Stacked on hardening/stage-3-performance; review that PR first. No schema migration is introduced by Stage 4. No production infrastructure or .env was changed. Managed database/Redis failover, shared uploads, TLS ingress and measured failover drills remain deployment prerequisites; this does not guarantee 99.99% availability.
+
+Validation: 92 targeted tests passed (570 assertions), changed PHP syntax and diff checks pass, and /ready returned 200 against the running local MariaDB app. Tests include database/cache outage responses, node draining, shared storage cleanup, absence of session middleware, and trusted/untrusted forwarded headers. Production failover drills and Nginx template validation on the target server remain required.
