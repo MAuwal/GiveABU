@@ -13,10 +13,15 @@ use Illuminate\Support\Facades\Log;
 class InterswitchPaymentController extends Controller
 {
     private string $merchantCode;
+
     private string $payItemId;
+
     private string $secretKey;
+
     private string $baseUrl;
+
     private string $checkoutUrl;
+
     private string $currencyCode;
 
     public function __construct()
@@ -40,6 +45,7 @@ class InterswitchPaymentController extends Controller
 
         if (empty($this->merchantCode) || empty($this->payItemId)) {
             Log::error('Interswitch configuration missing');
+
             return response()->json([
                 'message' => 'Interswitch payment provider is not configured. Please contact support.',
             ], 500);
@@ -68,7 +74,7 @@ class InterswitchPaymentController extends Controller
             'frequency' => 'onetime',
             'endowment' => 'yes',
             'status' => 'pending',
-            'payment_reference' => 'ABU_ZARIA_INTERSWITCH_' . time() . '_' . uniqid(),
+            'payment_reference' => 'ABU_ZARIA_INTERSWITCH_'.time().'_'.uniqid(),
         ]);
 
         $this->upsertTransaction($donation->payment_reference, [
@@ -85,8 +91,7 @@ class InterswitchPaymentController extends Controller
             'channel' => null,
             'fee' => 0,
         ]);
-        
-        
+
         return response()->json([
             'checkout_url' => $this->checkoutUrl,
             'payload' => [
@@ -103,7 +108,6 @@ class InterswitchPaymentController extends Controller
                 'mode' => 'TEST',
             ],
         ]);
-
 
         // return response()->json([
         //     'success' => true,
@@ -166,324 +170,129 @@ class InterswitchPaymentController extends Controller
      */
     public function verifyApi($reference)
     {
-        if (!$reference) {
+        if (! is_string($reference) || $reference === '') {
             return response()->json(['success' => false, 'message' => 'Missing reference'], 400);
         }
-
+        $donation = Donation::where('payment_reference', $reference)->first();
+        if (! $donation) {
+            return response()->json(['success' => false, 'message' => 'Donation not found'], 404);
+        }
+        if ($donation->status === 'completed') {
+            return response()->json(['success' => true, 'message' => 'Payment already verified', 'data' => ['status' => 'completed', 'amount' => $donation->amount, 'reference' => $reference]]);
+        }
         try {
-            $donation = Donation::where('payment_reference', $reference)->first();
-            
-            if (!$donation) {
-                return response()->json(['success' => false, 'message' => 'Donation not found'], 404);
+            $verification = $this->requeryTransaction($reference, \App\Services\PaymentAmount::kobo($donation->amount));
+        } catch (\Throwable $e) {
+            $this->recordVerification($donation, 'verification.unavailable', 'unavailable');
+            Log::warning('Interswitch verification unavailable', ['donation_id' => $donation->id, 'exception' => get_class($e)]);
+
+            return response()->json(['success' => false, 'message' => 'Verification temporarily unavailable. Please retry.', 'data' => ['status' => $donation->status]], 503);
+        }
+        $data = $verification['data'] ?? $verification;
+        if (! is_array($data)) {
+            $data = [];
+        }
+        $code = trim((string) ($data['ResponseCode'] ?? $data['responseCode'] ?? ''));
+        $received = \App\Services\PaymentAmount::minor($data['Amount'] ?? $data['amount'] ?? null);
+        $result = \Illuminate\Support\Facades\DB::transaction(function () use ($donation, $data, $code, $received, $reference) {
+            if ($donation->project_id) {
+                \App\Models\Project::whereKey($donation->project_id)->lockForUpdate()->firstOrFail();
             }
-
-            if ($donation->status === 'completed') {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Payment already verified',
-                    'data' => ['status' => 'completed']
-                ]);
+            $locked = Donation::whereKey($donation->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status === 'completed') {
+                return ['status' => 'completed', 'changed' => false];
             }
+            $returnedReference = $data['MerchantReference'] ?? $data['merchantReference'] ?? $reference;
+            if ($returnedReference !== $reference) {
+                $this->recordVerification($locked, 'verification.rejected', 'reference_mismatch');
 
-            $amountMinor = (int) round($donation->amount * 100);
-            
-            try {
-                $verification = $this->requeryTransaction($reference, $amountMinor);
-            } catch (\Exception $e) {
-                $donation->update(['status' => 'failed']);
-                $this->upsertTransaction($reference, [
-                    'donation_id' => $donation->id,
-                    'donor_id' => $donation->donor_id,
-                    'project_id' => $donation->project_id,
-                    'category' => $donation->project_id ? 'project' : 'general',
-                    'event_type' => 'charge.failed',
-                    'gateway_reference' => $reference,
-                    'amount' => $donation->amount,
-                    'currency' => 'NGN',
-                    'status' => 'failed',
-                    'gateway_status' => 'not_found',
-                    'channel' => null,
-                    'fee' => 0,
-                    'response_payload' => json_encode(['error' => $e->getMessage()]),
-                ]);
-
-                return response()->json(['success' => false, 'message' => 'Gateway check failed: ' . $e->getMessage()], 400);
+                return ['status' => $locked->status, 'reason' => 'reference_mismatch'];
             }
+            if (in_array($code, ['00', '0', '000', '10', '11'], true)) {
+                $expected = \App\Services\PaymentAmount::kobo($locked->amount);
+                if ($received === null || $received !== $expected) {
+                    $reason = $received === null ? 'invalid_amount' : 'amount_mismatch';
+                    $this->recordVerification($locked, 'verification.rejected', $reason, ['expected_minor' => $expected, 'received_minor' => $received]);
+                    Log::warning('Interswitch verified amount rejected', ['donation_id' => $locked->id, 'expected_minor' => $expected, 'received_minor' => $received]);
 
-            $data = $verification['data'] ?? $verification;
-            $responseCode = $data['ResponseCode'] ?? $data['responseCode'] ?? null;
-            $amountPaid = isset($data['Amount']) ? ((int) $data['Amount'] / 100) : $donation->amount;
-            $paymentReference = $data['PaymentReference'] ?? $data['paymentReference'] ?? null;
-            $merchantReference = $data['MerchantReference'] ?? $data['merchantReference'] ?? $reference;
-            $normalizedCode = trim((string) $responseCode);
-            $isSuccess = in_array($normalizedCode, ['00', '0', '000'], true);
-
-            if ($isSuccess) {
-                $donation->update([
-                    'status' => 'completed',
-                    'verified_at' => now(),
-                    'paid_at' => now(),
-                    'amount' => $amountPaid,
-                ]);
-
-                $alreadyLogged = PaymentTransaction::where('payment_reference', $merchantReference)
-                    ->where('event_type', 'charge.success')
-                    ->exists();
-
-                if (!$alreadyLogged) {
-                    $this->upsertTransaction($merchantReference, [
-                        'donation_id' => $donation->id,
-                        'donor_id' => $donation->donor_id,
-                        'project_id' => $donation->project_id,
-                        'category' => $donation->project_id ? 'project' : 'general',
-                        'event_type' => 'charge.success',
-                        'gateway_reference' => $paymentReference ?? $reference,
-                        'amount' => $amountPaid,
-                        'currency' => 'NGN',
-                        'status' => 'completed',
-                        'gateway_status' => $normalizedCode,
-                        'channel' => $data['Channel'] ?? $data['channel'] ?? null,
-                        'fee' => 0,
-                        'response_payload' => json_encode($data),
-                    ]);
-
-                    if ($donation->project_id) {
-                        app(\App\Services\ProjectFundingService::class)->rebuild($donation->project_id);
-                    }
-                    $this->sendThankYouEmail($donation);
-                    (new TierNotificationService())->handleDonationTierCheck($donation);
+                    return ['status' => $locked->status, 'reason' => $reason];
+                }
+                $locked->update(['status' => 'completed', 'verified_at' => now(), 'paid_at' => now()]);
+                $this->recordVerification($locked, 'charge.success', $code);
+                if ($locked->project_id) {
+                    app(\App\Services\ProjectFundingService::class)->rebuild($locked->project_id);
                 }
 
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Payment verified successfully',
-                    'data' => [
-                        'status' => 'completed',
-                        'amount' => $amountPaid,
-                        'reference' => $reference,
-                    ]
-                ]);
+                return ['status' => 'completed', 'changed' => true];
             }
+            // Only explicitly confirmed declines/cancellation are terminal. Unknown,
+            // processing and operational errors remain recoverable.
+            if (in_array($code, ['05', '14', '17', '51', '54', '55', '57', '62', '65', 'Z6'], true)) {
+                $locked->update(['status' => 'failed']);
+                $this->recordVerification($locked, 'charge.failed', $code);
 
-            // Not successful - Mark as failed
-            $donation->update(['status' => 'failed']);
-            $this->upsertTransaction($merchantReference, [
-                'donation_id' => $donation->id,
-                'donor_id' => $donation->donor_id,
-                'project_id' => $donation->project_id,
-                'category' => $donation->project_id ? 'project' : 'general',
-                'event_type' => 'charge.failed',
-                'gateway_reference' => $paymentReference ?? $reference,
-                'amount' => $amountPaid,
-                'currency' => 'NGN',
-                'status' => 'failed',
-                'gateway_status' => $normalizedCode,
-                'channel' => $data['Channel'] ?? $data['channel'] ?? null,
-                'fee' => 0,
-                'response_payload' => json_encode($data),
-            ]);
+                return ['status' => 'failed'];
+            }
+            $this->recordVerification($locked, 'verification.pending', $code ?: 'unknown');
 
-            return response()->json(['success' => false, 'message' => 'Payment not successful', 'data' => ['status' => (string)$responseCode]]);
-
-        } catch (\Exception $e) {
-            Log::error('Interswitch API verify exception', ['error' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error during verification'], 500);
+            return ['status' => $locked->status, 'reason' => 'pending'];
+        }, 5);
+        if ($result['changed'] ?? false) {
+            $this->sendThankYouEmail($donation->fresh());
+            try {
+                app(TierNotificationService::class)->handleDonationTierCheck($donation->fresh());
+            } catch (\Throwable $e) {
+                Log::warning('Interswitch tier notification unavailable', ['donation_id' => $donation->id]);
+            }
         }
+        $success = $result['status'] === 'completed';
+
+        return response()->json(['success' => $success, 'message' => $success ? 'Payment verified successfully' : 'Payment not completed',
+            'data' => ['status' => $result['status'], 'amount' => $donation->amount, 'reference' => $reference, 'reason' => $result['reason'] ?? null]],
+            in_array($result['reason'] ?? '', ['amount_mismatch', 'invalid_amount', 'reference_mismatch'], true) ? 409 : 200);
     }
 
     public function handleRedirect(Request $request)
     {
-        $requestData = $request->all();
-        Log::info('Interswitch redirect received', [
-            'method' => $request->method(),
-            'request' => array_intersect_key($requestData, array_flip(['txnref', 'txn_ref', 'txnRef', 'amount', 'resp', 'responseCode', 'ResponseCode', 'merchantReference', 'merchant_reference', 'reference'])),
-        ]);
+        $reference = $request->input('txnref') ?? $request->input('txn_ref') ?? $request->input('txnRef')
+            ?? $request->input('merchantReference') ?? $request->input('merchant_reference')
+            ?? $request->input('reference') ?? $request->input('transactionreference');
+        $response = $this->verifyApi($reference);
+        $result = $response->getData(true);
+        $status = $result['data']['status'] ?? 'pending';
 
-        $txnRef = $request->input('txnref')
-            ?? $request->input('txn_ref')
-            ?? $request->input('txnRef')
-            ?? $request->input('merchantReference')
-            ?? $request->input('merchant_reference')
-            ?? $request->input('reference')
-            ?? $request->input('transactionreference');
-
-        $amountMinor = $request->input('amount');
-        $responseCode = $request->input('resp') ?? $request->input('responseCode') ?? $request->input('ResponseCode');
-
-        if (!$txnRef) {
-            Log::warning('Interswitch redirect missing txnref', ['request' => $requestData]);
-            return redirect($this->buildRedirectUrl('failed', null, 0));
-        }
-
-        try {
-            $verification = $this->requeryTransaction($txnRef, $amountMinor);
-            $data = $verification['data'] ?? $verification;
-            $responseCode = $data['ResponseCode'] ?? $data['responseCode'] ?? $responseCode;
-            $amountPaid = isset($data['Amount']) ? ((int) $data['Amount'] / 100) : ($amountMinor ? ((int) $amountMinor / 100) : 0);
-            $paymentReference = $data['PaymentReference'] ?? $data['paymentReference'] ?? null;
-            $merchantReference = $data['MerchantReference'] ?? $data['merchantReference'] ?? $txnRef;
-
-            $donation = Donation::where('payment_reference', $merchantReference)->first();
-
-            if (!$donation) {
-                Log::warning('Interswitch redirect donation not found', ['txn_ref' => $txnRef]);
-                return redirect($this->buildRedirectUrl('failed', $txnRef, $amountPaid));
-            }
-
-            $normalizedCode = trim((string) $responseCode);
-            $success = in_array($normalizedCode, ['00', '0', '000'], true);
-
-            if ($success) {
-                $donation->update(['status' => 'completed', 'verified_at' => now(), 'paid_at' => now(), 'amount' => $amountPaid]);
-
-                $alreadyLogged = PaymentTransaction::where('payment_reference', $merchantReference)
-                    ->where('event_type', 'charge.success')
-                    ->exists();
-
-                if (!$alreadyLogged) {
-                    $this->upsertTransaction($merchantReference, [
-                        'donation_id' => $donation->id,
-                        'donor_id' => $donation->donor_id,
-                        'project_id' => $donation->project_id,
-                        'category' => $donation->project_id ? 'project' : 'general',
-                        'event_type' => 'charge.success',
-                        'gateway_reference' => $paymentReference ?? $txnRef,
-                        'amount' => $amountPaid,
-                        'currency' => 'NGN',
-                        'status' => 'completed',
-                        'gateway_status' => (string) $responseCode,
-                        'channel' => $data['Channel'] ?? $data['channel'] ?? null,
-                        'fee' => 0,
-                        'response_payload' => json_encode($data),
-                    ]);
-
-                    $this->sendThankYouEmail($donation);
-                    (new TierNotificationService())->handleDonationTierCheck($donation);
-                }
-
-                Log::info('Interswitch payment success', [
-                    'reference' => $merchantReference,
-                    'txn_ref' => $txnRef,
-                    'amount' => $amountPaid,
-                ]);
-
-                return redirect($this->buildRedirectUrl('success', $merchantReference, $amountPaid));
-            }
-
-            $donation->update(['status' => 'failed']);
-
-            $this->upsertTransaction($merchantReference, [
-                'donation_id' => $donation->id,
-                'donor_id' => $donation->donor_id,
-                'project_id' => $donation->project_id,
-                'category' => $donation->project_id ? 'project' : 'general',
-                'event_type' => 'charge.failed',
-                'gateway_reference' => $paymentReference ?? $txnRef,
-                'amount' => $amountPaid,
-                'currency' => 'NGN',
-                'status' => 'failed',
-                'gateway_status' => (string) $responseCode,
-                'channel' => $data['Channel'] ?? $data['channel'] ?? null,
-                'fee' => 0,
-                'response_payload' => json_encode($data),
-            ]);
-
-            return redirect($this->buildRedirectUrl('failed', $merchantReference, $amountPaid));
-        } catch (\Exception $e) {
-            Log::error('Interswitch redirect error', ['error' => $e->getMessage(), 'request' => $request->all()]);
-            return redirect($this->buildRedirectUrl('failed', $txnRef, 0));
-        }
+        return redirect($this->buildRedirectUrl($status === 'completed' ? 'success' : $status, is_string($reference) ? $reference : null, (float) ($result['data']['amount'] ?? 0)));
     }
 
     public function webhook(Request $request)
     {
         $signature = $request->header('X-Interswitch-Signature');
-        $payload = $request->getContent();
-
-        if (!$signature || empty($this->secretKey)) {
-            Log::warning('Interswitch webhook signature missing or secret not configured', ['signature' => $signature ? 'present' : 'missing']);
+        if (! $signature || empty($this->secretKey) || ! hash_equals(hash_hmac('sha512', $request->getContent(), $this->secretKey), $signature)) {
             return response('', 400);
         }
-
-        $computedSignature = hash_hmac('sha512', $payload, $this->secretKey);
-
-        if (!hash_equals($computedSignature, $signature)) {
-            Log::warning('Interswitch webhook signature mismatch', ['received' => $signature, 'computed' => $computedSignature]);
-            return response('', 400);
-        }
-
         $data = $request->json('data', []);
-        $merchantReference = $data['merchantReference'] ?? $data['MerchantReference'] ?? $data['txnref'] ?? $data['txn_ref'] ?? null;
-        $responseCode = $data['responseCode'] ?? $data['ResponseCode'] ?? $data['resp'] ?? null;
-        $confirmedAmount = isset($data['amount']) ? ((int) $data['amount'] / 100) : null;
-
-        if (!$merchantReference) {
-            Log::warning('Interswitch webhook missing merchantReference', ['payload' => $request->all()]);
-            return response('', 200);
+        $reference = $data['merchantReference'] ?? $data['MerchantReference'] ?? $data['txnref'] ?? $data['txn_ref'] ?? null;
+        if (! is_string($reference) || $reference === '') {
+            return response('', 400);
         }
+        // Signed notifications still trigger independent provider verification.
+        $response = $this->verifyApi($reference);
 
-        $donation = Donation::where('payment_reference', $merchantReference)->first();
-        if (!$donation) {
-            Log::warning('Interswitch webhook donation not found', ['merchantReference' => $merchantReference, 'payload' => $request->all()]);
-            return response('', 200);
-        }
+        return response('', $response->getStatusCode() === 503 ? 503 : 200);
+    }
 
-        $isSuccess = trim((string) $responseCode) === '00';
-
-        if ($isSuccess) {
-            $donation->update([
-                'status' => 'completed',
-                'verified_at' => now(),
-                'paid_at' => now(),
-                'amount' => $confirmedAmount ?? $donation->amount,
-            ]);
-
-            $alreadyLogged = PaymentTransaction::where('payment_reference', $merchantReference)
-                ->where('event_type', 'charge.success')
-                ->exists();
-
-            if (!$alreadyLogged) {
-                $this->upsertTransaction($merchantReference, [
-                    'donation_id' => $donation->id,
-                    'donor_id' => $donation->donor_id,
-                    'project_id' => $donation->project_id,
-                    'category' => $donation->project_id ? 'project' : 'general',
-                    'event_type' => 'charge.success',
-                    'gateway_reference' => $data['paymentReference'] ?? $data['PaymentReference'] ?? null,
-                    'amount' => $confirmedAmount ?? $donation->amount,
-                    'currency' => 'NGN',
-                    'status' => 'completed',
-                    'gateway_status' => (string) $responseCode,
-                    'channel' => $data['channel'] ?? $data['Channel'] ?? null,
-                    'fee' => 0,
-                    'response_payload' => json_encode($request->json()->all()),
-                ]);
-
-                $this->sendThankYouEmail($donation);
-                (new TierNotificationService())->handleDonationTierCheck($donation);
-            }
-
-            return response('', 200);
-        }
-
-        $donation->update(['status' => 'failed']);
-        $this->upsertTransaction($merchantReference, [
-            'donation_id' => $donation->id,
-            'donor_id' => $donation->donor_id,
-            'project_id' => $donation->project_id,
-            'category' => $donation->project_id ? 'project' : 'general',
-            'event_type' => 'charge.failed',
-            'gateway_reference' => $data['paymentReference'] ?? $data['PaymentReference'] ?? null,
-            'amount' => $confirmedAmount ?? $donation->amount,
-            'currency' => 'NGN',
-            'status' => 'failed',
-            'gateway_status' => (string) $responseCode,
-            'channel' => $data['channel'] ?? $data['Channel'] ?? null,
-            'fee' => 0,
-            'response_payload' => json_encode($request->json()->all()),
+    private function recordVerification(Donation $donation, string $event, string $gatewayStatus, array $metadata = []): void
+    {
+        $eventKey = hash('sha256', json_encode(['interswitch', $donation->payment_reference, $event, $gatewayStatus, $metadata]));
+        PaymentTransaction::firstOrCreate([
+            'event_key' => $eventKey,
+        ], [
+            'payment_gateway' => 'interswitch', 'payment_reference' => $donation->payment_reference,
+            'event_type' => $event, 'gateway_status' => $gatewayStatus,
+            'donation_id' => $donation->id, 'donor_id' => $donation->donor_id, 'project_id' => $donation->project_id,
+            'category' => $donation->project_id ? 'project' : 'general', 'amount' => $donation->amount,
+            'currency' => 'NGN', 'status' => $donation->status, 'metadata' => $metadata,
         ]);
-
-        return response('', 200);
     }
 
     private function requeryTransaction(string $txnRef, $amountMinor)
@@ -493,25 +302,29 @@ class InterswitchPaymentController extends Controller
             'transactionreference' => $txnRef,
         ];
 
-        if (!is_null($amountMinor) && $amountMinor !== '') {
+        if (! is_null($amountMinor) && $amountMinor !== '') {
             $params['amount'] = $amountMinor;
         }
 
         $response = Http::acceptJson()
             ->timeout(30)
-            ->get($this->baseUrl . '/collections/api/v1/gettransaction.json', $params);
+            ->get($this->baseUrl.'/collections/api/v1/gettransaction.json', $params);
 
-        if ($response->failed()) {
+        if (! $response->successful()) {
             Log::error('Interswitch transaction requery failed', [
                 'txn_ref' => $txnRef,
                 'amount' => $amountMinor,
                 'status' => $response->status(),
-                'body' => $response->body(),
             ]);
             throw new \Exception('Unable to verify Interswitch transaction.');
         }
 
-        return $response->json();
+        $data = $response->json();
+        if (! is_array($data)) {
+            throw new \UnexpectedValueException('Invalid provider response');
+        }
+
+        return $data;
     }
 
     private function buildRedirectUrl(string $status, ?string $reference, float $amount): string
@@ -522,7 +335,8 @@ class InterswitchPaymentController extends Controller
             'reference' => $reference,
             'amount' => $amount,
         ]);
-        return $url . '?' . $query;
+
+        return $url.'?'.$query;
     }
 
     private function upsertTransaction(string $paymentReference, array $attributes): PaymentTransaction
@@ -545,11 +359,11 @@ class InterswitchPaymentController extends Controller
     {
         try {
             $donor = $donation->donor;
-            if (!$donor || !$donor->email) {
+            if (! $donor || ! $donor->email) {
                 return;
             }
 
-            $donorName = trim(($donor->surname ?? '') . ' ' . ($donor->name ?? '')) ?: 'Valued Donor';
+            $donorName = trim(($donor->surname ?? '').' '.($donor->name ?? '')) ?: 'Valued Donor';
             \Illuminate\Support\Facades\Mail::send('emails.thank-you', [
                 'donorName' => $donorName,
                 'amount' => number_format($donation->amount, 2),
@@ -560,8 +374,8 @@ class InterswitchPaymentController extends Controller
                 'logoUrl' => 'https://abu-endowment.cloud/abu_logo_white_for_email.png',
             ], function ($message) use ($donor) {
                 $message->from(config('mail.from.address', 'noreply@abu-endowment.edu.ng'), config('mail.from.name', 'ABU Giving'))
-                        ->to($donor->email)
-                        ->subject('Thank You for Your Donation to ABU Giving');
+                    ->to($donor->email)
+                    ->subject('Thank You for Your Donation to ABU Giving');
             });
         } catch (\Exception $e) {
             Log::error('Interswitch thank you email failed', [

@@ -19,6 +19,23 @@ class PaymentIntegrityPreflight extends Command
         $this->info("Duplicate reference groups: {$duplicates}; unexpected donation states: {$unexpected}.");
         $this->info('Reconcile duplicates against provider records; never delete or select a financial winner automatically.');
 
-        return $duplicates || $unexpected ? self::FAILURE : self::SUCCESS;
+        $unbound = DB::table('donations')->where('status', 'pending')
+            ->where('payment_reference', 'like', 'ABU_ZARIA_SQUAD_%')
+            ->whereNotExists(function ($query) {
+                $query->selectRaw('1')->from('payment_transactions')
+                    ->whereColumn('payment_transactions.payment_reference', 'donations.payment_reference')
+                    ->where('payment_transactions.payment_gateway', 'squad');
+            })->get(['id', 'payment_reference']);
+        // LIKE treats underscores as wildcards: enforce the literal prefix too.
+        $unbound = $unbound->filter(fn ($row) => str_starts_with($row->payment_reference, 'ABU_ZARIA_SQUAD_'));
+        $this->warn('Pending Squad-style references without Squad binding: '.$unbound->count());
+        foreach ($unbound as $row) {
+            $this->line("Donation {$row->id}: {$row->payment_reference}");
+        }
+        if ($unbound->isNotEmpty()) {
+            $this->warn('Reconcile against Squad records before deployment; these payments would return wrong_gateway. No bindings were created.');
+        }
+
+        return $duplicates || $unexpected || $unbound->isNotEmpty() ? self::FAILURE : self::SUCCESS;
     }
 }

@@ -432,4 +432,97 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->assertSame(2, Donation::where('status', 'pending')->count());
         $this->assertSame(1, PaymentTransaction::where('event_type', 'initialization.unavailable')->count());
     }
+
+    private function interswitchGateway(mixed $response, int $status = 200): void
+    {
+        config(['services.interswitch.base_url' => 'https://interswitch.test', 'services.interswitch.secret_key' => 'test-secret']);
+        Http::swap(new \Illuminate\Http\Client\Factory);
+        Http::preventStrayRequests();
+        Http::fake(['https://interswitch.test/*' => $response instanceof \Closure ? $response : Http::response($response, $status)]);
+    }
+
+    public function test_interswitch_network_and_provider_outages_preserve_pending(): void
+    {
+        foreach ([Http::failedConnection(), ['ResponseCode' => '00', 'Amount' => 12345]] as $index => $response) {
+            $this->interswitchGateway($response, $index === 1 ? 503 : 200);
+            $this->getJson('/api/interswitch/verify/'.$this->reference)->assertStatus(503)->assertJsonPath('data.status', 'pending');
+            $this->assertSame('pending', $this->donation->fresh()->status);
+            $this->assertSame('123.45', $this->donation->fresh()->amount);
+        }
+        $this->assertFalse(PaymentTransaction::where('payment_gateway', 'interswitch')->where('event_type', 'charge.failed')->exists());
+        $this->assertTrue(PaymentTransaction::where('event_type', 'verification.unavailable')->exists());
+    }
+
+    public function test_interswitch_only_confirmed_failure_changes_state(): void
+    {
+        foreach (['09', '90009', '10005', 'unknown', ''] as $code) {
+            $this->interswitchGateway(['ResponseCode' => $code]);
+            $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk()->assertJsonPath('data.status', 'pending');
+            $this->assertSame('pending', $this->donation->fresh()->status);
+        }
+        $this->interswitchGateway(['ResponseCode' => '05']);
+        $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk()->assertJsonPath('data.status', 'failed');
+        $this->assertSame('failed', $this->donation->fresh()->status);
+    }
+
+    public function test_interswitch_amount_mismatch_or_invalid_amount_never_completes_or_overwrites(): void
+    {
+        foreach ([12344, 12346, '123.45', 12345.5, null] as $amount) {
+            $this->interswitchGateway(['ResponseCode' => '00', 'Amount' => $amount]);
+            $this->getJson('/api/interswitch/verify/'.$this->reference)->assertStatus(409)->assertJsonPath('success', false);
+            $this->assertSame('pending', $this->donation->fresh()->status);
+            $this->assertSame('123.45', $this->donation->fresh()->amount);
+            $this->assertNull($this->donation->fresh()->paid_at);
+            $this->assertEquals(0, $this->project->fresh()->raised);
+        }
+        $event = PaymentTransaction::where('payment_gateway', 'interswitch')->where('gateway_status', 'amount_mismatch')->firstOrFail();
+        $this->assertSame(12345, $event->metadata['expected_minor']);
+        $this->assertSame(12344, $event->metadata['received_minor']);
+        $this->assertSame(2, PaymentTransaction::where('payment_gateway', 'interswitch')->where('gateway_status', 'amount_mismatch')->count());
+    }
+
+    public function test_interswitch_exact_integer_kobo_completes_once_preserving_expected_amount(): void
+    {
+        $this->interswitchGateway(['ResponseCode' => '00', 'Amount' => '12345']);
+        $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk()->assertJsonPath('success', true);
+        $this->getJson('/api/interswitch/verify/'.$this->reference)->assertOk()->assertJsonPath('success', true);
+        $this->assertSame('123.45', $this->donation->fresh()->amount);
+        $this->assertEquals('123.45', $this->project->fresh()->raised);
+        $this->assertSame(1, PaymentTransaction::where('payment_gateway', 'interswitch')->where('event_type', 'charge.success')->count());
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['amount'] === 12345);
+    }
+
+    public function test_interswitch_redirect_and_webhook_use_verified_expected_amount(): void
+    {
+        $this->interswitchGateway(['ResponseCode' => '00', 'Amount' => 1]);
+        $request = \Illuminate\Http\Request::create('/redirect', 'POST', ['txnref' => $this->reference, 'amount' => 1, 'resp' => '00']);
+        $response = app(\App\Http\Controllers\InterswitchPaymentController::class)->handleRedirect($request);
+        $this->assertStringContainsString('status=pending', $response->getTargetUrl());
+        $body = json_encode(['data' => ['merchantReference' => $this->reference, 'responseCode' => '00', 'amount' => 12345]]);
+        $this->call('POST', '/api/interswitch/webhook', [], [], [], ['CONTENT_TYPE' => 'application/json',
+            'HTTP_X_INTERSWITCH_SIGNATURE' => hash_hmac('sha512', $body, 'test-secret')], $body)->assertOk();
+        $this->assertSame('pending', $this->donation->fresh()->status);
+        $this->assertSame('123.45', $this->donation->fresh()->amount);
+        Http::assertSent(fn ($request) => $request['amount'] === 12345);
+        $this->interswitchGateway(Http::failedConnection());
+        $response = app(\App\Http\Controllers\InterswitchPaymentController::class)->handleRedirect($request);
+        $this->assertStringContainsString('status=pending', $response->getTargetUrl());
+        $this->call('POST', '/api/interswitch/webhook', [], [], [], ['CONTENT_TYPE' => 'application/json',
+            'HTTP_X_INTERSWITCH_SIGNATURE' => hash_hmac('sha512', $body, 'test-secret')], $body)->assertStatus(503);
+        $this->assertSame('pending', $this->donation->fresh()->status);
+    }
+
+    public function test_preflight_reports_unbound_historical_squad_references_read_only(): void
+    {
+        PaymentTransaction::where('payment_gateway', 'squad')->delete();
+        PaymentTransaction::create(['payment_gateway' => 'interswitch', 'payment_reference' => $this->reference,
+            'event_type' => 'payment.initialized', 'status' => 'pending']);
+        $this->artisan('payments:preflight')->expectsOutput('Pending Squad-style references without Squad binding: 1')
+            ->expectsOutput('Donation '.$this->donation->id.': '.$this->reference)->assertFailed();
+        $this->assertSame('pending', $this->donation->fresh()->status);
+        $this->assertFalse(PaymentTransaction::where('payment_gateway', 'squad')->exists());
+        app(SquadPaymentService::class)->event($this->donation, 'payment.initialized');
+        $this->artisan('payments:preflight')->expectsOutput('Pending Squad-style references without Squad binding: 0')->assertSuccessful();
+    }
 }

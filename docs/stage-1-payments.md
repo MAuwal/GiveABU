@@ -6,7 +6,7 @@ The deployed migration history defines donations.status as pending/success/faile
 
 Squad previously overwrote expected amounts, recreated donations in the callback, trusted webhook JSON, marked provider outages failed, overwrote initialization audit records, and completed payments without locking. The admin verification actions and pending-payment poller contained separate completion implementations; the poller also referenced a missing transactions relationship. Cleanup deleted unresolved donations after 24 hours. The thank-you page incorrectly promised no charge had occurred when verification failed.
 
-This change centralizes all Squad completion in SquadPaymentService. Paystack and Interswitch share the corrected schema and project reconciliation helper; their wider gateway verification/security reviews remain outstanding. No availability guarantee follows from these changes. Stages 2–6 remain separate.
+This change centralizes all Squad completion in SquadPaymentService. Paystack and Interswitch share the corrected schema and project reconciliation helper. Interswitch API, redirect and webhook now share server-side verification with recoverable outages and exact expected-amount checks; wider gateway/security reviews remain outstanding. No availability guarantee follows from these changes. Stages 2–6 remain separate.
 
 ## State and authority
 
@@ -67,3 +67,13 @@ The migration is forward-only: rollback throws rather than shrink financial enum
 ## Stage 2 follow-up
 
 Review authorization, throttling and data exposure for donor-tier writes, donor edits, send-sms, test-google-token, debug device registration, messaging, alumni/donor endpoints and payment endpoints. Audit Paystack/Interswitch success verification, webhook signatures, cross-gateway reference binding, transient errors, duplicate financial/notification effects and admin backfill/reporting semantics. Review broad reporting aliases and receipt exposure. Infrastructure, Redis, queues, storage boot-time directory creation and monitoring remain later stages.
+
+## Interswitch PR review revisions
+
+Verification exceptions, connection failures, unsuccessful HTTP responses and unknown/processing response codes preserve the existing Donation state. Only an explicit allowlist of verified bank declines/cancellation transitions to failed; missing or unfamiliar codes stay recoverable. Interswitch response-code reference: https://docs.interswitchgroup.com/docs/payment-response-codes and https://docs.interswitchgroup.com/docs/response-codes.
+
+API verification, browser redirect and authenticated webhook use the same independent server query. The query amount comes from the existing Donation, never redirect/webhook input. Successful verification requires a valid integer provider amount exactly equal to expected integer kobo. Missing, fractional or mismatched amounts return 409, leave the donation uncompleted, and record sanitized expected/received minor units in distinct reconciliation events. Donation.amount is never overwritten. Completed donations are protected from reversal; project and donation locks follow the existing project-first order. Receipt/tier delivery happens after commit and cannot undo completion. Existing webhook signature mechanics are preserved; this change does not claim a full Interswitch integration/signature audit.
+
+`payments:preflight` now lists pending literal `ABU_ZARIA_SQUAD_` references without any Squad PaymentTransaction reference binding and exits unsuccessfully when present. An Interswitch binding does not satisfy this check. The command is read-only: investigate historical provider records and reconcile gateway binding before deployment; it never creates a binding automatically. No additional migration or mobile settings change is required by these review revisions. Clients must handle retryable verification 503 and amount rejection 409; redirects show pending when verification is unavailable.
+
+Six additional regression tests cover network/provider outages, uncertain versus confirmed failure, invalid/mismatched amounts and reconciliation evidence, exact kobo and duplicate success, redirect/webhook verification, and read-only historical preflight reporting.
