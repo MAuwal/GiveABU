@@ -30,7 +30,7 @@
             <p>Best regards,<br><strong>GIVE ABU Team</strong></p>
         </div>
         <div style="text-align: center; padding: 15px; font-size: 12px; color: #999;">
-            <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
         </div>
     </div>
 </body>

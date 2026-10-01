@@ -134,7 +134,7 @@
             
             <div class="mt-10 pt-6 border-t border-gray-100 text-center">
                 <p class="text-xs text-gray-400">
-                    &copy; {{ date('Y') }} ABU Endowment Foundation. All rights reserved.
+                    &copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.
                 </p>
             </div>
         </div>

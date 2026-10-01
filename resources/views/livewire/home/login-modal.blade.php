@@ -144,7 +144,7 @@
                             </form>
                             
                             <div class="mt-auto text-center">
-                                <p class="text-muted small mb-0">&copy; {{ date('Y') }} ABU Endowment Foundation. All rights reserved.</p>
+                                <p class="text-muted small mb-0">&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
                             </div>
                         </div>
                     </div>

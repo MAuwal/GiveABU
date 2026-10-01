@@ -43,7 +43,7 @@
             <p>Best regards,<br>The GIVE ABU Team</p>
         </div>
         <div class="footer">
-            <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
         </div>
     </div>
 </body>

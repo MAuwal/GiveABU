@@ -126,7 +126,7 @@
         <div class="footer">
             <p>This is an automated email. Please do not reply to this message.</p>
             <p>For inquiries, please contact us at: endowment@abu.edu.ng</p>
-            <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
         </div>
     </div>
 </body>

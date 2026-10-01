@@ -37,7 +37,7 @@
 
         <div style="text-align: center; margin-top: 20px; color: #666; font-size: 12px;">
             <p>This is an automated message. Please do not reply to this email.</p>
-            <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} ABU. All rights reserved. Powered by @@KADICT Hub.</p>
         </div>
     </div>
 </body>
