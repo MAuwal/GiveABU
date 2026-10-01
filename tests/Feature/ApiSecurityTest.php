@@ -295,6 +295,43 @@ class ApiSecurityTest extends TestCase
         $this->assertSame(0, \App\Models\PasswordReset::count());
     }
 
+    public function test_existing_profile_can_set_password_only_after_following_emailed_signed_link(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+        $profile = Donor::create(['name' => 'Profile', 'surname' => 'Only', 'email' => 'profile-only@example.test']);
+        $this->from('/forgot-password')->post('/donor/forgot-password', ['email' => $profile->email])->assertRedirect('/forgot-password');
+        $this->assertFalse(DonorSession::where('donor_id', $profile->id)->exists());
+        $url = '';
+        \Illuminate\Support\Facades\Mail::assertSent(\App\Mail\PasswordResetLinkMail::class, function ($mail) use (&$url, $profile) {
+            $url = $mail->resetUrl;
+
+            return $mail->hasTo($profile->email);
+        });
+        $this->get($url)->assertOk()->assertSee('Confirm password');
+        $payload = ['password' => 'profile-secure-password', 'password_confirmation' => 'profile-secure-password'];
+        $this->post($url, $payload)->assertRedirect(route('donor.password.request'));
+        $account = DonorSession::where('donor_id', $profile->id)->firstOrFail();
+        $this->assertSame($profile->email, $account->username);
+        $this->assertNotNull($account->email_verified_at);
+        $this->assertTrue(\Illuminate\Support\Facades\Hash::check($payload['password'], $account->password));
+        $this->post($url, $payload)->assertSessionHasErrors('token');
+        $this->assertSame(1, DonorSession::where('donor_id', $profile->id)->count());
+    }
+
+    public function test_profile_setup_rejects_unsigned_expired_tampered_and_changed_email_links(): void
+    {
+        $profile = Donor::create(['name' => 'Profile', 'surname' => 'Only', 'email' => 'profile-only@example.test']);
+        $payload = ['password' => 'profile-secure-password', 'password_confirmation' => 'profile-secure-password'];
+        $this->post('/donor/set-password/'.$profile->id, $payload)->assertForbidden();
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute('donor.password.setup', now()->subMinute(), ['donor' => $profile->id, 'email' => $profile->email]);
+        $this->post($url, $payload)->assertForbidden();
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute('donor.password.setup', now()->addMinutes(10), ['donor' => $profile->id, 'email' => $profile->email]);
+        $this->post($url.'&email=other@example.test', $payload)->assertForbidden();
+        $profile->update(['email' => 'changed@example.test']);
+        $this->post($url, $payload)->assertForbidden();
+        $this->assertFalse(DonorSession::where('donor_id', $profile->id)->exists());
+    }
+
     public function test_admin_website_password_recovery_uses_local_broker_link(): void
     {
         Schema::table('users', function (Blueprint $table) {

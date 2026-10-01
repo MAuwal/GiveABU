@@ -52,3 +52,8 @@ Route::get('/admin/forgot-password', function () {
 Route::get('/password-reset/{token}', function (\Illuminate\Http\Request $request, string $token) {
     return response()->view('auth.password-recovery', ['admin' => true, 'reset' => true, 'token' => $token, 'email' => $request->query('email', '')])->header('Cache-Control', 'no-store')->header('Referrer-Policy', 'no-referrer');
 })->middleware('guest')->name('password.reset');
+
+Route::get('/donor/set-password/{donor}', [\App\Http\Controllers\Auth\DonorPasswordController::class, 'setup'])
+    ->middleware(['signed', 'throttle:10,1'])->name('donor.password.setup');
+Route::post('/donor/set-password/{donor}', [\App\Http\Controllers\Auth\DonorPasswordController::class, 'storeSetup'])
+    ->middleware(['signed', 'throttle:10,1'])->name('donor.password.setup.store');

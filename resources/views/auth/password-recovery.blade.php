@@ -22,7 +22,7 @@
     @if($errors->any())
         <div class="error" role="alert">@foreach($errors->all() as $error)<p>{{ $error }}</p>@endforeach</div>
     @endif
-    <form method="POST" action="{{ route($admin ? ($reset ? 'password.store' : 'password.email') : ($reset ? 'donor.password.store' : 'donor.password.email')) }}">
+    <form method="POST" action="{{ $formAction ?? route($admin ? ($reset ? 'password.store' : 'password.email') : ($reset ? 'donor.password.store' : 'donor.password.email')) }}">
         @csrf
         @if($reset) <input type="hidden" name="token" value="{{ $token }}"> @endif
         @if(!$reset || $admin)
