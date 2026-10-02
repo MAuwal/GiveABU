@@ -125,7 +125,7 @@
 
         <div class="footer">
             <p>This is an automated email. Please do not reply to this message.</p>
-            <p>For inquiries, please contact us at: endowment@abu.edu.ng</p>
+            <p>For inquiries, please contact us at: info@giveabu.com</p>
             <p>&copy; {{ date('Y') }} GIVE ABU. All rights reserved.</p>
         </div>
     </div>

@@ -417,6 +417,80 @@ class ApiSecurityTest extends TestCase
         $this->get('/donor/dashboard')->assertRedirect('/');
     }
 
+    public function test_session_cookie_configuration_preserves_environment_values(): void
+    {
+        $keys = ['SESSION_SECURE_COOKIE', 'SESSION_DOMAIN', 'SESSION_SAME_SITE'];
+        $before = [];
+        foreach ($keys as $key) {
+            $before[$key] = [$_ENV[$key] ?? null, $_SERVER[$key] ?? null];
+        }
+        try {
+            $_ENV['SESSION_SECURE_COOKIE'] = $_SERVER['SESSION_SECURE_COOKIE'] = 'true';
+            $_ENV['SESSION_DOMAIN'] = $_SERVER['SESSION_DOMAIN'] = '.giveabu.com';
+            $_ENV['SESSION_SAME_SITE'] = $_SERVER['SESSION_SAME_SITE'] = 'strict';
+            $session = require config_path('session.php');
+            $this->assertTrue($session['secure']);
+            $this->assertSame('.giveabu.com', $session['domain']);
+            $this->assertSame('strict', $session['same_site']);
+        } finally {
+            foreach ($before as $key => [$envValue, $serverValue]) {
+                if ($envValue === null) {
+                    unset($_ENV[$key]);
+                } else {
+                    $_ENV[$key] = $envValue;
+                }
+                if ($serverValue === null) {
+                    unset($_SERVER[$key]);
+                } else {
+                    $_SERVER[$key] = $serverValue;
+                }
+            }
+        }
+    }
+
+    public function test_reconciliation_actions_are_admin_only(): void
+    {
+        $this->get('/admin/reconciliation')->assertRedirect();
+        $role = Role::create(['role_title' => 'finance']);
+        $user = User::create(['name' => 'Finance', 'email' => 'finance@example.test', 'password' => 'password', 'role_id' => $role->id]);
+        $this->actingAs($user)->get('/admin/reconciliation')->assertForbidden();
+        $this->post('/admin/reconciliation/receipts/1')->assertForbidden();
+        $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'pending']);
+        $this->post('/admin/reconciliation/payments/'.$donation->id)->assertForbidden();
+    }
+
+    public function test_admin_can_view_reconciliation_and_unbound_payment_requires_reconciliation(): void
+    {
+        Schema::create('users_info', function (Blueprint $table) {
+            $table->id();
+            $table->integer('user_id');
+        });
+        \Illuminate\Support\Facades\Queue::fake();
+        Schema::table('donations', fn (Blueprint $table) => $table->string('payment_reference')->nullable());
+        Schema::create('payment_transactions', function (Blueprint $table) {
+            $table->id();
+            $table->integer('donation_id');
+            $table->string('payment_gateway');
+            $table->string('event_type');
+        });
+        (require database_path('migrations/2026_10_01_000005_create_payment_notification_outbox.php'))->up();
+        Schema::create('failed_jobs', function (Blueprint $table) {
+            $table->id();
+            $table->string('uuid');
+            $table->string('connection');
+            $table->string('queue');
+            $table->timestamp('failed_at');
+        });
+        $role = Role::create(['role_title' => 'admin']);
+        $user = User::create(['name' => 'Admin', 'email' => 'admin@example.test', 'password' => 'password', 'role_id' => $role->id]);
+        $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'pending', 'payment_reference' => 'ADMIN-RECONCILE']);
+        DB::table('donations')->where('id', $donation->id)->update(['created_at' => null]);
+        $this->actingAs($user)->get('/admin/reconciliation')->assertOk()->assertSee('ADMIN-RECONCILE')->assertSee('Failed queue jobs')->assertSee('N/A');
+        $this->post('/admin/reconciliation/payments/'.$donation->id)->assertRedirect();
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        $this->assertSame('pending', $donation->fresh()->status);
+    }
+
     public function test_admin_website_password_recovery_uses_local_broker_link(): void
     {
         Schema::table('users', function (Blueprint $table) {

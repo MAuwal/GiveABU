@@ -220,6 +220,7 @@ class InterswitchPaymentController extends Controller
                 }
                 $locked->update(['status' => 'completed', 'verified_at' => now(), 'paid_at' => now()]);
                 $this->recordVerification($locked, 'charge.success', $code);
+                app(\App\Services\PaymentNotificationOutbox::class)->enqueue($locked, 'interswitch');
                 if ($locked->project_id) {
                     app(\App\Services\ProjectFundingService::class)->rebuild($locked->project_id);
                 }
@@ -238,15 +239,6 @@ class InterswitchPaymentController extends Controller
 
             return ['status' => $locked->status, 'reason' => 'pending'];
         }, 5);
-        if ($result['changed'] ?? false) {
-            app(\App\Services\PaymentSmsService::class)->send($donation, 'interswitch');
-            $this->sendThankYouEmail($donation->fresh());
-            try {
-                app(TierNotificationService::class)->handleDonationTierCheck($donation->fresh());
-            } catch (\Throwable $e) {
-                Log::warning('Interswitch tier notification unavailable', ['donation_id' => $donation->id]);
-            }
-        }
         $success = $result['status'] === 'completed';
 
         return response()->json(['success' => $success, 'message' => $success ? 'Payment verified successfully' : 'Payment not completed',

@@ -137,6 +137,7 @@ class SquadPaymentController extends Controller
 
         return view('donation-thank-you', [
             'success' => $result['success'], 'paymentState' => $result['outcome'],
+            'statusUrl' => $donation && $donation->status === 'pending' ? \Illuminate\Support\Facades\URL::temporarySignedRoute('donation.status', now()->addMinutes(15), ['donation' => $donation->id]) : null,
             'donorName' => $result['success'] ? (trim(($donor?->surname ?? '').' '.($donor?->name ?? '')) ?: 'Valued Donor') : 'Guest',
             'amount' => $result['success'] ? $donation->amount : 0, 'email' => $result['success'] ? ($donor?->email ?? '') : '',
             'tierName' => $result['success'] ? $donor?->tier?->name : null,
