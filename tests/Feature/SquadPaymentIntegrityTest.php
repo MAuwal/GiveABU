@@ -890,4 +890,57 @@ class SquadPaymentIntegrityTest extends TestCase
         \Illuminate\Support\Facades\Queue::assertNothingPushed();
     }
 
+    public function test_financial_transaction_summary_keeps_one_completed_payment_and_all_audit_events(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway();
+        app(\App\Services\SquadPaymentService::class)->verify($this->reference);
+        $service = app(\App\Services\SquadPaymentService::class);
+        $service->event($this->donation->fresh(), 'sms.accepted');
+        $service->event($this->donation->fresh(), 'notification.sent');
+        $rows = \App\Services\AdminPaymentQuery::query()->get();
+        $this->assertCount(1, $rows);
+        $this->assertSame('charge.success', $rows->first()->event_type);
+        $this->assertSame('completed', $rows->first()->status);
+        $this->assertSame(0, \App\Services\AdminPaymentQuery::query()->where('status', 'pending')->count());
+        $this->assertGreaterThan(1, \App\Models\PaymentTransaction::count());
+        $this->assertEquals($this->donation->amount, \App\Services\AdminPaymentQuery::query()->sum('amount'));
+    }
+
+    public function test_thousand_receipts_publish_as_individual_jobs_without_external_delivery(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $donations = $outbox = [];
+        $attributes = $this->donation->getAttributes();
+        for ($i = 1; $i <= 1000; $i++) {
+            $id = $this->donation->id + $i;
+            $donations[] = array_merge($attributes, ['id' => $id, 'payment_reference' => 'BATCH-'.$i, 'status' => 'completed']);
+            $outbox[] = ['donation_id' => $id, 'gateway' => 'squad', 'status' => 'pending', 'created_at' => now(), 'updated_at' => now()];
+        }
+        foreach (array_chunk($donations, 100) as $rows) DB::table('donations')->insert($rows);
+        foreach (array_chunk($outbox, 100) as $rows) DB::table('payment_notification_outbox')->insert($rows);
+        $this->artisan('payments:dispatch-notifications', ['--limit' => 1000])->assertSuccessful();
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1000);
+        $this->assertSame(1000, DB::table('payment_notification_outbox')->whereNotNull('published_at')->count());
+        Mail::assertNothingSent();
+        Http::assertNothingSent();
+    }
+
+    public function test_receipt_pacing_releases_over_quota_before_delivery_claims(): void
+    {
+        config(['hardening.receipts_per_minute' => 2]);
+        $job = \Mockery::mock();
+        $job->shouldReceive('release')->once()->with(\Mockery::on(fn ($delay) => $delay > 0));
+        $middleware = new \Illuminate\Queue\Middleware\RateLimited('payment-receipts');
+        $delivered = 0;
+        for ($i = 0; $i < 3; $i++) {
+            $middleware->handle($job, function () use (&$delivered) { $delivered++; });
+        }
+        $this->assertSame(2, $delivered);
+        $this->assertFalse(PaymentTransaction::where('event_type', 'notification.claimed')->exists());
+        $receipt = new \App\Jobs\DeliverPaymentNotification(1);
+        $this->assertSame(3, $receipt->maxExceptions);
+        $this->assertGreaterThan(now()->addHours(23)->timestamp, $receipt->retryUntil()->getTimestamp());
+    }
+
 }

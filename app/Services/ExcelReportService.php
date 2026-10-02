@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
+use App\Services\AdminPaymentQuery;
+
 use App\Models\Donation;
 use App\Models\Donor;
-use App\Models\PaymentTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -157,7 +158,7 @@ class ExcelReportService
         $this->tableHeader($ws, $row, ['Gateway', 'Count', 'Amount (₦)', 'Fees (₦)', 'Avg (₦)'], 'E');
         $row++;
 
-        $gw = PaymentTransaction::query()
+        $gw = AdminPaymentQuery::query()
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->when($this->filters['project']   ?? null, fn($q) => $q->where('project_id', $this->filters['project']))
@@ -321,7 +322,7 @@ class ExcelReportService
             foreach ($recs as $t) {
                 $status = strtolower($t->status ?? '');
                 $ws->setCellValue("A{$row}", $row - 2);
-                $ws->setCellValue("B{$row}", $t->created_at->format('Y-m-d H:i'));
+                $ws->setCellValue("B{$row}", $t->created_at?->format('Y-m-d H:i') ?? 'N/A');
                 $ws->setCellValue("C{$row}", ucfirst($t->payment_gateway ?? ''));
                 $ws->setCellValue("D{$row}", ucfirst($t->category ?? 'N/A'));
                 $ws->setCellValue("E{$row}", ucfirst(str_replace(['.','_'], ' ', $t->event_type ?? '')));
@@ -455,7 +456,7 @@ class ExcelReportService
                 COALESCE(sum(CASE WHEN status='failed'  THEN amount ELSE 0 END),0) as failed")
             ->groupBy('month')->orderBy('month')->get()->keyBy('month');
 
-        $monthGw = PaymentTransaction::query()
+        $monthGw = AdminPaymentQuery::query()
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->whereIn('status', ['completed', 'success'])
@@ -556,7 +557,19 @@ class ExcelReportService
 
     private function transactionQuery()
     {
-        return PaymentTransaction::query()
+        return AdminPaymentQuery::query()
+            ->when($this->filters['period'] ?? null, function ($q) {
+                match ($this->filters['period']) {
+                    'today' => $q->whereDate('created_at', today()),
+                    'week' => $q->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]),
+                    'month' => $q->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year),
+                    'year' => $q->whereYear('created_at', now()->year),
+                    default => null,
+                };
+            })
+            ->when($this->filters['gateway'] ?? null, fn($q) => $q->where('payment_gateway', $this->filters['gateway']))
+            ->when($this->filters['status'] ?? null, fn($q) => $q->where('status', $this->filters['status']))
+            ->when($this->filters['category'] ?? null, fn($q) => $q->where('category', $this->filters['category']))
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->when($this->filters['project']   ?? null, fn($q) => $q->where('project_id', $this->filters['project']))

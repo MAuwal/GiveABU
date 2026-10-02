@@ -41,7 +41,7 @@
                         <div class="flex items-center justify-between">
                             <span class="text-sm text-gray-500">Created</span>
                             <span class="text-sm text-gray-100">
-                                {{ $project->created_at->format('M d, Y') }}
+                                {{ $project->created_at?->format('M d, Y') ?? 'N/A' }}
                             </span>
                         </div>
                     </div>

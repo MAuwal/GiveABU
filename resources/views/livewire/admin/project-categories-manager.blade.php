@@ -90,7 +90,7 @@
                                 <i class="fas fa-project-diagram mr-1"></i> {{ $category->projects_count }}
                             </span>
                         </td>
-                        <td class="hidden md:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{{ $category->created_at->format('M d, Y') }}</td>
+                        <td class="hidden md:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">{{ $category->created_at?->format('M d, Y') ?? 'N/A' }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <div class="flex space-x-2">
                                 <button onclick="Livewire.dispatch('open-edit-category-modal', { categoryId: {{ $category->id }} })"

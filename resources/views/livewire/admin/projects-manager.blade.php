@@ -90,7 +90,7 @@
                     <!-- Date Badge -->
                     <div class="absolute bottom-3 left-3">
                         <span class="text-white/90 text-xs font-medium drop-shadow-md">
-                            {{ $project->created_at->format('M Y') }}
+                            {{ $project->created_at?->format('M Y') ?? 'N/A' }}
                         </span>
                     </div>
                 </div>
@@ -227,7 +227,7 @@
                                 </div>
                                 <div class="text-right">
                                     <div class="font-bold text-emerald-600">₦{{ number_format($donation->amount, 0) }}</div>
-                                    <div class="text-xs text-slate-500 mt-1">{{ $donation->created_at->format('M d, Y') }}</div>
+                                    <div class="text-xs text-slate-500 mt-1">{{ $donation->created_at?->format('M d, Y') ?? 'N/A' }}</div>
                                 </div>
                             </div>
                         </div>

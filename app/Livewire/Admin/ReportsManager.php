@@ -2,10 +2,11 @@
 
 namespace App\Livewire\Admin;
 
+use App\Services\AdminPaymentQuery;
+
 use Livewire\Component;
 use Livewire\WithPagination;
 use App\Models\Donation;
-use App\Models\PaymentTransaction;
 use App\Models\Project;
 use App\Models\Department;
 use Illuminate\Database\Eloquent\Builder;
@@ -109,7 +110,7 @@ class ReportsManager extends Component
     public function getFilteredTotals(): array
     {
         $d = $this->applyFilters(Donation::query());
-        $t = $this->applyTxnFilters(PaymentTransaction::query());
+        $t = $this->applyTxnFilters(AdminPaymentQuery::query());
 
         return [
             'donations' => [

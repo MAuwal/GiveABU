@@ -18,6 +18,8 @@ class DeliverPaymentNotification implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 120;
 
+    public int $maxExceptions = 3;
+
     public int $uniqueFor = 600;
 
     public function __construct(public int $outboxId)
@@ -34,6 +36,21 @@ class DeliverPaymentNotification implements ShouldBeUnique, ShouldQueue
     public function backoff(): array
     {
         return [30, 120, 300];
+    }
+
+    public function retryUntil(): \DateTimeInterface
+    {
+        // Queue releases due to throttling must not exhaust the three error attempts.
+        return now()->addDay();
+    }
+
+    public function middleware(): array
+    {
+        return [
+            (new \Illuminate\Queue\Middleware\WithoutOverlapping('payment-receipt:'.$this->outboxId))
+                ->shared()->releaseAfter(30)->expireAfter(150),
+            new \Illuminate\Queue\Middleware\RateLimited('payment-receipts'),
+        ];
     }
 
     public function handle(): void

@@ -16,6 +16,7 @@ class ExcelExportController extends Controller
             'date_to'   => $request->date_to   ?? '',
             'project'   => $request->project   ?? '',
             'search'    => $request->search    ?? '',
+            'category' => $request->category ?? '',
             'gateway'   => $request->gateway   ?? '',
             'status'    => $request->status    ?? '',
             'period'    => $request->period    ?? '',

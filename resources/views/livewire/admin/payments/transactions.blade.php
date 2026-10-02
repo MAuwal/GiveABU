@@ -8,7 +8,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     {{-- Summary Stats --}}
-    <div wire:ignore class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <p class="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide font-semibold">Total Collected</p>
             <p class="text-2xl font-bold text-slate-800 dark:text-white mt-1">₦{{ $chartData['totals']['all'] }}</p>
@@ -158,7 +158,7 @@
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Gateway</th>
                         @if(!$showDetailsModal)<th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Category</th>@endif
-                        @if(!$showDetailsModal)<th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Event</th>@endif
+                        @if(!$showDetailsModal)<th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Payment Reference</th>@endif
                         @if(!$showDetailsModal)<th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Donor / Project</th>@endif
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
@@ -168,7 +168,7 @@
                 <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     @forelse($transactions as $transaction)
                         <tr class="hover:bg-slate-50 dark:hover:bg-slate-700 transition">
-                            <td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ $transaction->created_at->format('M d, Y H:i') }}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ $transaction->created_at?->format('M d, Y H:i') ?? 'N/A' }}</td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm">
                                 @if($transaction->payment_gateway === 'paystack')
                                     <!--<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">-->
@@ -187,7 +187,7 @@
                                 @endif
                             </td>
                             @if(!$showDetailsModal)<td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ ucfirst($transaction->category ?? 'N/A') }}</td>@endif
-                            @if(!$showDetailsModal)<td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ ucfirst(str_replace(['.', '_'], ' ', $transaction->event_type)) }}</td>@endif
+                            @if(!$showDetailsModal)<td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ $transaction->payment_reference ?? 'N/A' }}</td>@endif
                             @if(!$showDetailsModal)
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
                                 <div>{{ optional($transaction->donor)->full_name ?? 'N/A' }}</div>
@@ -296,7 +296,7 @@
                     </div>
                     <div>
                         <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">Event Type</p>
-                        <p class="text-sm text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 rounded px-3 py-2">{{ ucfirst(str_replace(['.', '_'], ' ', $selectedTransaction->event_type)) }}</p>
+                        <p class="text-sm text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 rounded px-3 py-2">{{ ucfirst(str_replace(['.', '_'], ' ', $selectedTransaction->event_type ?? 'No recorded event')) }}</p>
                     </div>
                     <div>
                         <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">Channel</p>
@@ -304,9 +304,24 @@
                     </div>
                     <div>
                         <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400 font-semibold mb-2">Date & Time</p>
-                        <p class="text-sm text-slate-700 dark:text-slate-200">{{ $selectedTransaction->created_at->format('M d, Y · H:i:s') }}</p>
+                        <p class="text-sm text-slate-700 dark:text-slate-200">{{ $selectedTransaction->created_at?->format('M d, Y · H:i:s') ?? 'N/A' }}</p>
                     </div>
                 </div>
+
+                <section class="border-t border-slate-200 dark:border-slate-700 pt-4">
+                    <h3 class="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-3">Payment event timeline</h3>
+                    <ol class="space-y-3">
+                    @forelse($paymentEvents as $event)
+                        <li class="border-l-2 border-slate-200 pl-3">
+                            <div class="text-sm text-slate-700 dark:text-slate-200">{{ ucfirst(str_replace(['.', '_'], ' ', $event->event_type ?? 'Event')) }}</div>
+                            <div class="text-xs text-slate-500">{{ $event->created_at?->format('M d, Y H:i:s') ?? 'N/A' }} · {{ ucfirst($event->status ?? 'unknown') }}</div>
+                            <details class="text-xs text-slate-500"><summary>Provider evidence</summary><pre class="overflow-x-auto whitespace-pre-wrap">{{ $event->response_payload }}</pre></details>
+                        </li>
+                    @empty
+                        <li class="text-sm text-slate-500">No recorded events.</li>
+                    @endforelse
+                    </ol>
+                </section>
 
                 @if($selectedTransaction->donor)
                     <div class="border-t border-slate-200 dark:border-slate-700 pt-4">

@@ -2,15 +2,16 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Services\AdminPaymentQuery;
+
 use App\Http\Controllers\Controller;
-use App\Models\PaymentTransaction;
 use Illuminate\Http\Request;
 
 class TransactionExportController extends Controller
 {
     public function export(Request $request)
     {
-        $query = PaymentTransaction::with(['donor', 'project'])
+        $query = AdminPaymentQuery::query()->with(['donor', 'project'])
             ->when($request->gateway,  fn($q) => $q->where('payment_gateway', $request->gateway))
             ->when($request->status,   fn($q) => $q->where('status', $request->status))
             ->when($request->category, fn($q) => $q->where('category', $request->category))
@@ -19,6 +20,9 @@ class TransactionExportController extends Controller
                 $q->where(fn($sub) => $sub
                     ->where('payment_reference', 'like', $s)
                     ->orWhere('payment_gateway', 'like', $s)
+                    ->orWhere('gateway_reference', 'like', $s)
+                    ->orWhere('event_type', 'like', $s)
+                    ->orWhereHas('project', fn($p) => $p->where('project_title', 'like', $s))
                     ->orWhere('status', 'like', $s)
                     ->orWhereHas('donor', fn($d) => $d->where('name', 'like', $s)->orWhere('surname', 'like', $s)->orWhere('email', 'like', $s))
                 );
@@ -56,7 +60,7 @@ class TransactionExportController extends Controller
                 foreach ($rows as $t) {
                     fputcsv($handle, [
                         $t->id,
-                        $t->created_at->format('Y-m-d H:i:s'),
+                        $t->created_at?->format('Y-m-d H:i:s') ?? '',
                         ucfirst($t->payment_gateway),
                         ucfirst($t->category ?? 'N/A'),
                         ucfirst(str_replace(['.', '_'], ' ', $t->event_type)),
