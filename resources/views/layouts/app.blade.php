@@ -54,7 +54,7 @@
                     <h4 class="text-light mb-4">Our Office</h4>
                     <p class="mb-2"><i class="fa fa-map-marker-alt me-3"></i>Ahmadu Bello University, Samaru, Zaria, Kaduna State, Nigeria</p>
                     <p class="mb-2"><i class="fa fa-phone-alt me-3"></i>+234 701 234 5678</p>
-                    <p class="mb-2"><i class="fa fa-envelope me-3"></i>endowment@abu.edu.ng</p>
+                    <p class="mb-2"><i class="fa fa-envelope me-3"></i>info@giveabu.com</p>
                     <div class="d-flex pt-3">
                         <a class="btn btn-square btn-primary me-2" href="#!"><i class="fab fa-x-twitter"></i></a>
                         <a class="btn btn-square btn-primary me-2" href="#!"><i class="fab fa-facebook-f"></i></a>

@@ -459,7 +459,7 @@ class ApiSecurityTest extends TestCase
         $this->post('/admin/reconciliation/payments/'.$donation->id)->assertForbidden();
     }
 
-    public function test_admin_can_view_reconciliation_and_queue_payment_check(): void
+    public function test_admin_can_view_reconciliation_and_unbound_payment_requires_reconciliation(): void
     {
         Schema::create('users_info', function (Blueprint $table) {
             $table->id();
@@ -467,6 +467,12 @@ class ApiSecurityTest extends TestCase
         });
         \Illuminate\Support\Facades\Queue::fake();
         Schema::table('donations', fn (Blueprint $table) => $table->string('payment_reference')->nullable());
+        Schema::create('payment_transactions', function (Blueprint $table) {
+            $table->id();
+            $table->integer('donation_id');
+            $table->string('payment_gateway');
+            $table->string('event_type');
+        });
         (require database_path('migrations/2026_10_01_000005_create_payment_notification_outbox.php'))->up();
         Schema::create('failed_jobs', function (Blueprint $table) {
             $table->id();
@@ -478,9 +484,10 @@ class ApiSecurityTest extends TestCase
         $role = Role::create(['role_title' => 'admin']);
         $user = User::create(['name' => 'Admin', 'email' => 'admin@example.test', 'password' => 'password', 'role_id' => $role->id]);
         $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'pending', 'payment_reference' => 'ADMIN-RECONCILE']);
-        $this->actingAs($user)->get('/admin/reconciliation')->assertOk()->assertSee('ADMIN-RECONCILE')->assertSee('Failed queue jobs');
+        DB::table('donations')->where('id', $donation->id)->update(['created_at' => null]);
+        $this->actingAs($user)->get('/admin/reconciliation')->assertOk()->assertSee('ADMIN-RECONCILE')->assertSee('Failed queue jobs')->assertSee('N/A');
         $this->post('/admin/reconciliation/payments/'.$donation->id)->assertRedirect();
-        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\VerifyPendingPayment::class, 1);
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
         $this->assertSame('pending', $donation->fresh()->status);
     }
 

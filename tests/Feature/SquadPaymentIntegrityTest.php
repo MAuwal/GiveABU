@@ -869,4 +869,25 @@ class SquadPaymentIntegrityTest extends TestCase
         $this->get('/donation/status/'.$this->donation->id)->assertForbidden();
         Mail::assertNothingSent();
     }
+    public function test_reconciliation_verify_immediately_completes_and_queues_receipt_once(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        $this->gateway();
+        $controller = app(\App\Http\Controllers\Admin\PaymentReconciliationController::class);
+        $controller->verify($this->donation);
+        $this->assertSame('completed', $this->donation->fresh()->status);
+        $controller->verify($this->donation->fresh());
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\DeliverPaymentNotification::class, 1);
+        Mail::assertNothingSent();
+    }
+
+    public function test_reconciliation_verify_provider_outage_preserves_pending_without_receipts(): void
+    {
+        \Illuminate\Support\Facades\Queue::fake();
+        Http::fake(['*' => Http::response([], 503)]);
+        app(\App\Http\Controllers\Admin\PaymentReconciliationController::class)->verify($this->donation);
+        $this->assertSame('pending', $this->donation->fresh()->status);
+        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+    }
+
 }
