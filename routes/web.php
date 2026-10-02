@@ -208,3 +208,10 @@ require __DIR__.'/auth.php';
 Route::middleware(['auth'])->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
 });
+
+Route::prefix('donor')->name('donor.')->group(function () {
+    Route::get('/dashboard', [\App\Http\Controllers\DonorDashboardController::class, 'index'])->name('dashboard');
+    Route::get('/donations', [\App\Http\Controllers\DonorDashboardController::class, 'index'])->name('donations');
+    Route::get('/donations/{donation}', [\App\Http\Controllers\DonorDashboardController::class, 'show'])->name('donation.show');
+    Route::post('/logout', [\App\Http\Controllers\DonorDashboardController::class, 'logout'])->name('logout');
+});

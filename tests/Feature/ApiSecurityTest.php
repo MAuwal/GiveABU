@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Donation;
 use App\Models\Donor;
 use App\Models\DonorSession;
 use App\Models\Role;
@@ -146,7 +147,9 @@ class ApiSecurityTest extends TestCase
     {
         $other = Donor::create(['name' => 'Other', 'surname' => 'Donor', 'email' => 'other@example.test']);
         $this->getJson('/api/donor/'.$other->id.'/messages', $this->auth())->assertForbidden();
-        $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk()->assertHeader('Cache-Control', 'no-store, private');
+        $response = $this->getJson('/api/donor/'.$this->donor->id.'/messages', $this->auth())->assertOk();
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
     }
 
     public function test_cannot_edit_someone_else_or_promote_own_donor_tier(): void
@@ -341,6 +344,77 @@ class ApiSecurityTest extends TestCase
         $this->assertStringContainsString('Powered by @KADICT Hub', $html);
         $this->withSession(['recovery_requested' => true, 'status' => 'Check your inbox and spam folder.'])
             ->get('/forgot-password')->assertOk()->assertSee('Check your email')->assertSee('Check your inbox and spam folder.');
+    }
+
+    public function test_donor_login_modal_redirects_to_dashboard_for_password_and_google_token(): void
+    {
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->set('username', $this->donor->email)->set('password', 'strong-test-password')
+            ->call('login')->assertRedirect(route('donor.dashboard'));
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->call('saveAuthToken', $this->token)->assertRedirect(route('donor.dashboard'));
+        \Livewire\Livewire::test(\App\Livewire\Home\LoginModal::class)
+            ->call('saveAuthToken', 'invalid-token')->assertNoRedirect();
+    }
+
+    private function dashboardSchema(): void
+    {
+        Schema::create('projects', function (Blueprint $table) {
+            $table->id();
+            $table->string('project_title');
+        });
+        Schema::table('donations', function (Blueprint $table) {
+            $table->string('payment_reference')->nullable();
+            $table->string('endowment')->nullable();
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamp('verified_at')->nullable();
+        });
+        Schema::create('payment_transactions', function (Blueprint $table) {
+            $table->id();
+            $table->integer('donation_id');
+            foreach (['payment_gateway', 'payment_reference', 'gateway_reference', 'currency', 'status', 'channel', 'event_type', 'response_payload'] as $field) {
+                $table->string($field)->nullable();
+            }
+            $table->decimal('amount', 15, 2);
+            $table->decimal('fee', 15, 2)->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function test_donor_dashboard_lists_only_own_donations_and_scopes_totals(): void
+    {
+        $this->dashboardSchema();
+        Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'completed', 'payment_reference' => 'OWN-DONATION']);
+        Donation::create(['donor_id' => $this->donor->id, 'amount' => 2000, 'status' => 'pending', 'payment_reference' => 'OWN-PENDING']);
+        Donation::create(['donor_id' => 999, 'amount' => 9000, 'status' => 'completed', 'payment_reference' => 'OTHER-PRIVATE']);
+        $response = $this->withSession(['donor_token' => $this->token])->get('/donor/dashboard')->assertOk()
+            ->assertSee('OWN-DONATION')->assertSee('OWN-PENDING')->assertDontSee('OTHER-PRIVATE')
+            ->assertViewHas('stats', fn ($stats) => (float) $stats['total'] === 1000.0 && $stats['count'] === 2 && $stats['pending'] === 1);
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
+        $this->get('/donor/donations')->assertOk();
+    }
+
+    public function test_donor_transaction_details_reject_other_owners_and_hide_provider_payloads(): void
+    {
+        $this->dashboardSchema();
+        $donation = Donation::create(['donor_id' => $this->donor->id, 'amount' => 1000, 'status' => 'completed', 'payment_reference' => 'OWN-DONATION']);
+        $other = Donation::create(['donor_id' => 999, 'amount' => 9000, 'status' => 'completed']);
+        DB::table('payment_transactions')->insert(['donation_id' => $donation->id, 'amount' => 1000, 'payment_gateway' => 'squad', 'gateway_reference' => 'VISIBLE-GATEWAY-REF', 'status' => 'completed', 'event_type' => 'verification.completed', 'response_payload' => 'SECRET-PROVIDER-PAYLOAD']);
+        DB::table('payment_transactions')->insert(['donation_id' => $donation->id, 'amount' => 1000, 'event_type' => 'sms.claimed', 'gateway_reference' => 'PRIVATE-SMS-CLAIM']);
+        $this->withSession(['donor_token' => $this->token])->get('/donor/donations/'.$donation->id)->assertOk()
+            ->assertSee('VISIBLE-GATEWAY-REF')->assertDontSee('SECRET-PROVIDER-PAYLOAD')->assertDontSee('PRIVATE-SMS-CLAIM');
+        $this->get('/donor/donations/'.$other->id)->assertNotFound();
+    }
+
+    public function test_donor_dashboard_requires_valid_session_and_logout_revokes_token(): void
+    {
+        $this->get('/donor/dashboard')->assertRedirect('/');
+        $this->get('/donor/donations/1')->assertRedirect('/');
+        $this->withSession(['donor_token' => '1'])->get('/donor/dashboard')->assertRedirect('/');
+        $this->withSession(['donor_token' => $this->token])->post('/donor/logout')->assertRedirect('/');
+        $this->assertNull(app(DonorTokenService::class)->resolve($this->token));
+        $this->get('/donor/dashboard')->assertRedirect('/');
     }
 
     public function test_admin_website_password_recovery_uses_local_broker_link(): void

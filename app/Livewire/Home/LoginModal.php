@@ -67,10 +67,10 @@ class LoginModal extends Component
                 Session::put('donor_token', $data['token']);
             }
 
-            // Success - close modal and reload page to update auth state
+            // Open the donor dashboard after successful authentication.
             $this->close();
             $this->dispatch('login-success');
-            $this->js('window.location.reload()');
+            $this->redirectRoute('donor.dashboard');
         } catch (\Exception $e) {
             $this->error = $e->getMessage();
         } finally {
@@ -85,7 +85,7 @@ class LoginModal extends Component
             Session::put('donor_token', $token);
             $this->close();
             $this->dispatch('login-success');
-            $this->js('window.location.reload()');
+            $this->redirectRoute('donor.dashboard');
         }
     }
 

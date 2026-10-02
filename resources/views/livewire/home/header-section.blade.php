@@ -64,6 +64,7 @@
                                     @if(!$isLoggedIn)
                                         <li class="d-lg-none"><a href="#" wire:click.prevent="$dispatch('openLoginModal')">Sign In</a></li>
                                     @else
+                                        <li class="d-lg-none"><a href="{{ route('donor.dashboard') }}">My dashboard</a></li>
                                         <li class="d-lg-none"><a href="#" wire:click.prevent="logout">Logout</a></li>
                                     @endif
                                 </ul>
@@ -93,6 +94,7 @@
                                             <div class="px-3 py-2 border-bottom">
                                                 <small class="text-muted">{{ $user['email'] ?? '' }}</small>
                                             </div>
+                                            <a class="dropdown-item py-2" href="{{ route('donor.dashboard') }}">My dashboard</a>
                                             <a class="dropdown-item py-2" href="#" wire:click.prevent="$dispatch('openEditProfileModal')">Profile</a>
                                             <a class="dropdown-item py-2 text-danger" href="#" wire:click.prevent="logout">Logout</a>
                                         </div>
