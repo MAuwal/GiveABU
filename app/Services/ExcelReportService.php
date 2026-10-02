@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
+use App\Services\AdminPaymentQuery;
+
 use App\Models\Donation;
 use App\Models\Donor;
-use App\Models\PaymentTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -157,7 +158,7 @@ class ExcelReportService
         $this->tableHeader($ws, $row, ['Gateway', 'Count', 'Amount (₦)', 'Fees (₦)', 'Avg (₦)'], 'E');
         $row++;
 
-        $gw = PaymentTransaction::query()
+        $gw = AdminPaymentQuery::query()
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->when($this->filters['project']   ?? null, fn($q) => $q->where('project_id', $this->filters['project']))
@@ -171,7 +172,7 @@ class ExcelReportService
             ->selectRaw('payment_gateway, count(*) as cnt, COALESCE(sum(amount),0) as total, COALESCE(sum(fee),0) as fees')
             ->groupBy('payment_gateway')->get()->keyBy('payment_gateway');
 
-        foreach (['paystack' => 'Paystack', 'squad' => 'Squad'] as $key => $label) {
+        foreach (['squad' => 'Squad', 'interswitch' => 'Interswitch', 'paystack' => 'Paystack (historical)', 'unknown' => 'Reconciliation required'] as $key => $label) {
             $g   = $gw[$key] ?? null;
             $cnt = (int)($g?->cnt   ?? 0);
             $amt = (float)($g?->total ?? 0);
@@ -321,7 +322,7 @@ class ExcelReportService
             foreach ($recs as $t) {
                 $status = strtolower($t->status ?? '');
                 $ws->setCellValue("A{$row}", $row - 2);
-                $ws->setCellValue("B{$row}", $t->created_at->format('Y-m-d H:i'));
+                $ws->setCellValue("B{$row}", $t->created_at?->format('Y-m-d H:i') ?? 'N/A');
                 $ws->setCellValue("C{$row}", ucfirst($t->payment_gateway ?? ''));
                 $ws->setCellValue("D{$row}", ucfirst($t->category ?? 'N/A'));
                 $ws->setCellValue("E{$row}", ucfirst(str_replace(['.','_'], ' ', $t->event_type ?? '')));
@@ -425,7 +426,7 @@ class ExcelReportService
             $ws->getColumnDimension($c)->setWidth($w);
         }
 
-        $ws->mergeCells('A1:G1');
+        $ws->mergeCells('A1:H1');
         $ws->setCellValue('A1', 'MONTHLY DONATION TRENDS');
         $ws->getStyle('A1')->applyFromArray([
             'font'      => ['bold' => true, 'size' => 14, 'color' => ['argb' => self::WHITE]],
@@ -434,13 +435,13 @@ class ExcelReportService
         ]);
         $ws->getRowDimension(1)->setRowHeight(28);
 
-        $this->tableHeader($ws, 2, ['Month', 'Total (₦)', 'Completed (₦)', 'Pending (₦)', 'Failed (₦)', 'Paystack (₦)', 'Squad (₦)'], 'G');
-        $ws->getStyle('A2:G2')->applyFromArray([
+        $this->tableHeader($ws, 2, ['Month', 'Total (₦)', 'Completed (₦)', 'Pending (₦)', 'Failed (₦)', 'Paystack historical (₦)', 'Squad (₦)', 'Interswitch (₦)'], 'H');
+        $ws->getStyle('A2:H2')->applyFromArray([
             'font' => ['bold' => true, 'color' => ['argb' => self::WHITE]],
             'fill' => ['fillType' => Fill::FILL_SOLID, 'color' => ['argb' => self::BG_MID]],
         ]);
         $ws->freezePane('A3');
-        $ws->setAutoFilter('A2:G2');
+        $ws->setAutoFilter('A2:H2');
 
         $isSqlite = DB::connection()->getDriverName() === 'sqlite';
         $monthSql = $isSqlite ? "strftime('%Y-%m', created_at)" : "DATE_FORMAT(created_at, '%Y-%m')";
@@ -455,7 +456,7 @@ class ExcelReportService
                 COALESCE(sum(CASE WHEN status='failed'  THEN amount ELSE 0 END),0) as failed")
             ->groupBy('month')->orderBy('month')->get()->keyBy('month');
 
-        $monthGw = PaymentTransaction::query()
+        $monthGw = AdminPaymentQuery::query()
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->whereIn('status', ['completed', 'success'])
@@ -478,22 +479,23 @@ class ExcelReportService
             $ws->setCellValue("E{$row}", (float)($d?->failed    ?? 0));
             $ws->setCellValue("F{$row}", $ps);
             $ws->setCellValue("G{$row}", $sq);
-            $ws->getStyle("B{$row}:G{$row}")->getNumberFormat()->setFormatCode('#,##0.00');
+            $ws->setCellValue("H{$row}", (float)($gw->firstWhere('payment_gateway', 'interswitch')?->total ?? 0));
+            $ws->getStyle("B{$row}:H{$row}")->getNumberFormat()->setFormatCode('#,##0.00');
             if ($row % 2 === 0) {
-                $ws->getStyle("A{$row}:G{$row}")->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB(self::BG_GRAY);
+                $ws->getStyle("A{$row}:H{$row}")->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB(self::BG_GRAY);
             }
             $row++;
         }
 
         if ($row > 3) {
             $ws->setCellValue("A{$row}", 'TOTAL');
-            foreach (['B','C','D','E','F','G'] as $c) {
+            foreach (['B','C','D','E','F','G','H'] as $c) {
                 $ws->setCellValue("{$c}{$row}", "=SUM({$c}3:{$c}" . ($row - 1) . ")");
                 $ws->getStyle("{$c}{$row}")->getNumberFormat()->setFormatCode('#,##0.00');
             }
-            $ws->getStyle("A{$row}:G{$row}")->getFont()->setBold(true);
-            $ws->getStyle("A{$row}:G{$row}")->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB(self::BG_LIGHT);
-            $ws->getStyle("A2:G{$row}")->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN)->getColor()->setARGB(self::BORDER);
+            $ws->getStyle("A{$row}:H{$row}")->getFont()->setBold(true);
+            $ws->getStyle("A{$row}:H{$row}")->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB(self::BG_LIGHT);
+            $ws->getStyle("A2:H{$row}")->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN)->getColor()->setARGB(self::BORDER);
 
             // Charts are generated by VBA (BuildMonthlyBarChart macro) to ensure full Excel compatibility
         }
@@ -556,7 +558,19 @@ class ExcelReportService
 
     private function transactionQuery()
     {
-        return PaymentTransaction::query()
+        return AdminPaymentQuery::query()
+            ->when($this->filters['period'] ?? null, function ($q) {
+                match ($this->filters['period']) {
+                    'today' => $q->whereDate('created_at', today()),
+                    'week' => $q->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]),
+                    'month' => $q->whereMonth('created_at', now()->month)->whereYear('created_at', now()->year),
+                    'year' => $q->whereYear('created_at', now()->year),
+                    default => null,
+                };
+            })
+            ->when($this->filters['gateway'] ?? null, fn($q) => $q->where('payment_gateway', $this->filters['gateway']))
+            ->when($this->filters['status'] ?? null, fn($q) => $q->where('status', $this->filters['status']))
+            ->when($this->filters['category'] ?? null, fn($q) => $q->where('category', $this->filters['category']))
             ->when($this->filters['date_from'] ?? null, fn($q) => $q->whereDate('created_at', '>=', $this->filters['date_from']))
             ->when($this->filters['date_to']   ?? null, fn($q) => $q->whereDate('created_at', '<=', $this->filters['date_to']))
             ->when($this->filters['project']   ?? null, fn($q) => $q->where('project_id', $this->filters['project']))

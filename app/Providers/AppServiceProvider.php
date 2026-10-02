@@ -11,6 +11,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        \Illuminate\Support\Facades\RateLimiter::for('payment-receipts', function () {
+            return \Illuminate\Cache\RateLimiting\Limit::perMinute(
+                max(1, (int) config('hardening.receipts_per_minute', 60))
+            )->by('payment-receipts-global');
+        });
         ResetPassword::createUrlUsing(function (object $notifiable, string $token) {
             return route('password.reset', ['token' => $token, 'email' => $notifiable->getEmailForPasswordReset()]);
         });

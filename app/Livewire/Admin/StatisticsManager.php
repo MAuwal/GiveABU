@@ -2,10 +2,11 @@
 
 namespace App\Livewire\Admin;
 
+use App\Services\AdminPaymentQuery;
+
 use App\Models\Donation;
 use App\Models\Donor;
 use App\Models\DonorTier;
-use App\Models\PaymentTransaction;
 use App\Models\Project;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -67,7 +68,7 @@ class StatisticsManager extends Component
         $avg         = $completed > 0 ? round((float) $raised / $completed, 2) : 0;
         $prevAvg     = $prevComp  > 0 ? round((float) $prevRaised / $prevComp, 2) : 0;
 
-        $fees        = PaymentTransaction::where('status', 'completed')->where('created_at', '>=', $start)->sum('fee');
+        $fees        = AdminPaymentQuery::query()->where('status', 'completed')->where('created_at', '>=', $start)->sum('fee');
 
         $endoAmt     = Donation::where('status', 'completed')->where('endowment', 'yes')->where('created_at', '>=', $start)->sum('amount');
         $endoCnt     = Donation::where('status', 'completed')->where('endowment', 'yes')->where('created_at', '>=', $start)->count();
@@ -88,7 +89,7 @@ class StatisticsManager extends Component
         $days = (int) $this->period;
         $isSqlite = DB::connection()->getDriverName() === 'sqlite';
         $daySql = $isSqlite ? "strftime('%Y-%m-%d', created_at)" : "DATE_FORMAT(created_at, '%Y-%m-%d')";
-        $rows = PaymentTransaction::select(
+        $rows = AdminPaymentQuery::query()->select(
                 DB::raw("{$daySql} as day"),
                 'payment_gateway',
                 DB::raw('SUM(amount) as total')
@@ -125,7 +126,7 @@ class StatisticsManager extends Component
         ];
 
         // ── Gateway split ─────────────────────────────────────────
-        $gw = PaymentTransaction::where('status', 'completed')->where('created_at', '>=', $start)
+        $gw = AdminPaymentQuery::query()->where('status', 'completed')->where('created_at', '>=', $start)
             ->selectRaw('payment_gateway, count(*) as cnt, COALESCE(sum(amount),0) as total, COALESCE(sum(fee),0) as fees')
             ->groupBy('payment_gateway')->get()->keyBy('payment_gateway');
 
@@ -193,7 +194,7 @@ class StatisticsManager extends Component
 
         // ── Transactions by hour ──────────────────────────────────
         $hourSql = $isSqlite ? "CAST(strftime('%H', created_at) AS INTEGER)" : "HOUR(created_at)";
-        $hrRows = PaymentTransaction::where('status', 'completed')->where('created_at', '>=', $start)
+        $hrRows = AdminPaymentQuery::query()->where('status', 'completed')->where('created_at', '>=', $start)
             ->selectRaw("{$hourSql} as hr, count(*) as cnt")
             ->groupBy('hr')->get()->keyBy('hr');
 
@@ -205,7 +206,7 @@ class StatisticsManager extends Component
         $this->txnHourChart = ['labels' => $hLabels, 'data' => $hData];
 
         // ── Recent activity ───────────────────────────────────────
-        $this->recentActivity = PaymentTransaction::with('donor')
+        $this->recentActivity = AdminPaymentQuery::query()->with('donor')
             ->where('status', 'completed')->latest()->take(8)->get()
             ->map(fn($t) => [
                 'name'    => optional($t->donor)->full_name ?? 'Anonymous',

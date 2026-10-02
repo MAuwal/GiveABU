@@ -13,6 +13,7 @@ class ExcelExporter extends Component
     public string $dateTo      = '';
     public string $search      = '';
     public string $projectId   = '';
+    public string $category = '';
     public string $gateway     = '';
     public string $status      = '';
     public string $period      = '';
@@ -45,7 +46,9 @@ class ExcelExporter extends Component
         string $status      = '',
         string $period      = '',
         string $programmeId = '',
+        string $category = '',
     ): void {
+        $this->category = $category;
         $this->context     = $context;
         $this->dateFrom    = $dateFrom;
         $this->dateTo      = $dateTo;
@@ -87,6 +90,7 @@ class ExcelExporter extends Component
             'search'    => $this->search,
             'project'   => $this->projectId,
             'gateway'   => $this->gateway,
+            'category' => $this->category,
             'status'    => $this->status,
             'period'    => $this->period,
             'programme' => $this->programmeId,

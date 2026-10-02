@@ -78,7 +78,7 @@ class InterswitchPaymentController extends Controller
             'status' => 'pending',
         ], 'interswitch');
 
-        $this->upsertTransaction($donation->payment_reference, [
+        $this->recordInitialization($donation->payment_reference, [
             'donation_id' => $donation->id,
             'donor_id' => $donor->id,
             'project_id' => null,
@@ -333,12 +333,13 @@ class InterswitchPaymentController extends Controller
         return $url.'?'.$query;
     }
 
-    private function upsertTransaction(string $paymentReference, array $attributes): PaymentTransaction
+    private function recordInitialization(string $paymentReference, array $attributes): PaymentTransaction
     {
-        return PaymentTransaction::updateOrCreate(
+        return PaymentTransaction::firstOrCreate(
             [
                 'payment_gateway' => 'interswitch',
                 'payment_reference' => $paymentReference,
+                'event_type' => 'payment.initialized',
             ],
             array_merge([
                 'event_type' => 'payment.initialized',
