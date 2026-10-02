@@ -90,6 +90,9 @@ class AdminTransactionsTest extends TestCase
         $this->assertSame('Completed', $row[5]);
         $this->assertSame('100000.00', $row[6]);
         $this->assertSame(7, PaymentTransaction::count());
+        $workbook = (new \App\Services\ExcelReportService)->build([], ['trends']);
+        $this->assertSame('Interswitch (₦)', $workbook->getActiveSheet()->getCell('H2')->getValue());
+        $this->assertSame(100000.0, $workbook->getActiveSheet()->getCell('H3')->getValue());
     }
     public function test_bulk_verification_checks_each_unresolved_donation_once(): void
     {
@@ -119,6 +122,40 @@ class AdminTransactionsTest extends TestCase
         \Livewire\Livewire::test(PaymentTransactions::class)->call('viewTransaction', $donation->id)
             ->assertSee('Payment event timeline')->assertSee('Sms accepted')->assertSee('EXCEL-ONE');
         $this->assertSame(14, PaymentTransaction::count());
+    }
+
+    public function test_delivery_events_cannot_change_financial_gateway_attribution(): void
+    {
+        foreach (['squad', 'interswitch'] as $gateway) {
+            $donation = $this->payment($gateway, 'completed', 'ATTRIBUTION-'.$gateway);
+            PaymentTransaction::where('donation_id', $donation->id)->whereIn('event_type', ['sms.claimed', 'sms.accepted', 'notification.claimed'])->update(['payment_gateway' => 'paystack']);
+            $before = PaymentTransaction::where('donation_id', $donation->id)->get()->toArray();
+            $rows = AdminPaymentQuery::query()->where('id', $donation->id)->get();
+            $this->assertCount(1, $rows);
+            $this->assertSame($gateway, $rows->first()->payment_gateway);
+            $this->assertEquals(100000, $rows->first()->amount);
+            $this->assertSame($before, PaymentTransaction::where('donation_id', $donation->id)->get()->toArray());
+        }
+        $this->assertEquals(200000, AdminPaymentQuery::query()->sum('amount'));
+    }
+
+    public function test_conflicting_financial_evidence_requires_reconciliation(): void
+    {
+        $donation = $this->payment('squad', 'completed', 'CONFLICT');
+        PaymentTransaction::create(['donation_id' => $donation->id, 'payment_reference' => 'CONFLICT', 'payment_gateway' => 'interswitch', 'event_type' => 'verification.pending', 'status' => 'pending', 'amount' => 100000]);
+        $this->assertSame('unknown', AdminPaymentQuery::query()->findOrFail($donation->id)->payment_gateway);
+        $this->assertSame(1, AdminPaymentQuery::query()->count());
+        $this->assertEquals(100000, AdminPaymentQuery::query()->sum('amount'));
+        $this->assertSame(8, PaymentTransaction::count());
+    }
+
+    public function test_delivery_only_evidence_is_unknown_and_historical_paystack_remains_reportable(): void
+    {
+        $donation = $this->payment('squad', 'pending', 'DELIVERY-ONLY');
+        PaymentTransaction::where('donation_id', $donation->id)->update(['event_type' => 'sms.accepted']);
+        $this->assertSame('unknown', AdminPaymentQuery::query()->findOrFail($donation->id)->payment_gateway);
+        $historical = $this->payment('paystack', 'completed', 'HISTORICAL');
+        $this->assertSame('paystack', AdminPaymentQuery::query()->findOrFail($historical->id)->payment_gateway);
     }
 
 }

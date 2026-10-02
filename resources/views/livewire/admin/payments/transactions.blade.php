@@ -171,9 +171,7 @@
                             <td class="px-4 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ $transaction->created_at?->format('M d, Y H:i') ?? 'N/A' }}</td>
                             <td class="px-4 py-4 whitespace-nowrap text-sm">
                                 @if($transaction->payment_gateway === 'paystack')
-                                    <!--<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">-->
-                                    <!--    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Paystack-->
-                                    <!--</span>-->
+                                    <span class="text-xs text-slate-600 dark:text-slate-300">Paystack (historical)</span>
                                 @elseif($transaction->payment_gateway === 'squad')
                                     <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
                                         <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Squad

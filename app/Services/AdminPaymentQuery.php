@@ -16,7 +16,12 @@ class AdminPaymentQuery
             ->selectRaw("CASE WHEN project_id IS NULL THEN 'general' ELSE 'project' END AS category")
             ->selectRaw("'NGN' AS currency")
             ->selectSub(DB::table('payment_transactions')->selectRaw("CASE WHEN COUNT(DISTINCT payment_gateway) = 1 THEN MIN(payment_gateway) ELSE 'unknown' END")
-                ->whereColumn('donation_id', 'donations.id'), 'payment_gateway');
+                ->whereColumn('donation_id', 'donations.id')
+                ->where(fn ($q) => $q->where('event_type', 'payment.initialized')
+                    ->orWhere('event_type', 'like', 'verification.%')
+                    ->orWhere('event_type', 'like', 'charge.%')
+                    ->orWhere('event_type', 'payment.success')
+                    ->orWhere('event_type', 'payment.failed')), 'payment_gateway');
         foreach (['event_type', 'gateway_reference', 'channel', 'fee', 'response_payload'] as $column) {
             $metadata = DB::table('payment_transactions')->select($column)
                 ->whereColumn('donation_id', 'donations.id')
